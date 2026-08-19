@@ -1,9 +1,17 @@
 name = "lab2ldr"
 uuid = "deb9f8dc-a5eb-438d-8740-b8a41072836e"
-authors = ["lucas-khenayfis"]
 version = "1.0.0-DEV"
+authors = ["lucas-khenayfis"]
+
+[deps]
+HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
+LinearDecisionRules = "ee4db4e3-7eec-47e5-9935-9699b02754f6"
+SDDPlab = "5c1c4b2a-157d-4661-af07-65cbafd6173d"
 
 [compat]
+HiGHS = "1.24.1"
+LinearDecisionRules = "0.3.0"
+SDDPlab = "3.0.0"
 julia = "1.10.10"
 
 [extras]
