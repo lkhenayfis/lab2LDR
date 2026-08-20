@@ -193,3 +193,64 @@ function add_system_elements!(m::LDRModel, ses::SystemData, num_blocks::Int, num
     add_system_elements!(m, get_hydros(ses), num_blocks, num_stages)
     return nothing
 end
+
+# HYDRO BALANCE ------------------------------------------------------------------------------------
+
+function add_hydro_balance_parallel!(
+    m::JuMP.Model,
+    hydros::Hydros,
+    zeta::Float64,
+    w_k::Vector{Float64},
+    num_blocks::Int,
+    num_stages::Int
+)
+    num_hydros = length(hydros)
+
+    m[HYDRO_BALANCE] = JuMP.@constraint(
+        m,
+        [n = 1:num_hydros, s = 1:num_stages],
+        
+        m[STORED_VOLUME][n, s] ==
+            ifelse(s == 1, hydros[n].initial_storage, m[STORED_VOLUME][n, s-1]) + zeta * m[INFLOW][n, s] -
+        zeta * sum(w_k[k] * m[OUTFLOW][n, k, s] for k in 1:num_blocks) +
+
+        zeta * sum(
+            w_k[k] * m[OUTFLOW][j, k, s] for j in 1:num_hydros if
+            downstream(hydros.entities[j].id, hydros) == hydros.entities[n] for
+            k in 1:num_blocks
+        ) -
+
+        zeta * sum(
+            w_k[k] * m[PUMPED_FLOW][j, k, s] for j in get(pump_source_map, n, Int[]) for
+            k in 1:num_blocks
+        ) +
+
+        zeta * sum(
+            w_k[k] * m[PUMPED_FLOW][j, k, s] for j in get(pump_dest_map, n, Int[]) for
+            k in 1:num_blocks
+        )
+    )
+    return nothing
+end
+
+function add_hydro_balance!(
+    m::JuMP.Model,
+    hydros::Hydros,
+    block_mode::Symbol,
+    tau_k::Vector{Float64},
+    num_blocks::Int,
+    num_stages::Int
+)
+    w_k = get_block_weights(tau_k)
+
+    if block_mode == :parallel
+        zeta = 0.0036 * sum(tau_k)
+        add_hydro_balance_parallel!(m, hydros, zeta, w_k, num_blocks, num_stages)
+    elseif block_mode == :chronological
+        zeta_k = 0.0036 .* tau_k
+        add_hydro_balance_chronological!(m, hydros, zeta_k, w_k, num_blocks, num_stages)
+    else
+        error("Unknown block mode: $block_mode. Expected :parallel or :chronological.")
+    end
+    return nothing
+end
