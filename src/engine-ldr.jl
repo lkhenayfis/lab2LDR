@@ -187,9 +187,9 @@ function add_system_elements!(m::LDRModel, ses::Hydros, num_blocks::Int, num_sta
 end
 
 function add_system_elements!(m::LDRModel, ses::SystemData, num_blocks::Int, num_stages::Int)
-    add_system_elements!(m, get_buses(s), num_blocks)
-    add_system_elements!(m, get_lines(s), num_blocks)
-    add_system_elements!(m, get_thermals(s), num_blocks)
-    add_system_elements!(m, get_hydros(s), num_blocks)
+    add_system_elements!(m, get_buses(ses), num_blocks, num_stages)
+    add_system_elements!(m, get_lines(ses), num_blocks, num_stages)
+    add_system_elements!(m, get_thermals(ses), num_blocks, num_stages)
+    add_system_elements!(m, get_hydros(ses), num_blocks, num_stages)
     return nothing
 end
