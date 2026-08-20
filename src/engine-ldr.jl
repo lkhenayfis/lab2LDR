@@ -26,15 +26,25 @@ end
 
 # STAGE ATTRIBUTE ----------------------------------------------------------------------------------
 
+function build_cartesian_indexes(a::Array)
+    dim = ndims(a)
+    idx = [axes(a, i) for i in 1:(dim - 1)]
+    return CartesianIndex.(idx...)
+end
+
 function set_stage_attribute!(m::LDRModel, v::Symbol, num_stages::Int)
+    cart_indexes = build_cartesian_indexes(m[v])
     for s in 1:num_stages
-        set_attribute.(m[v][:,:,s], [Stage(s)])
+        set_attribute.(m[v][cart_indexes, s], [Stage(s)])
     end 
 end
 
 function set_stage_attribute!(m::LDRModel, vs::Vector{Symbol}, num_stages::Int)
-    for v in vs, s in 1:num_stages
-        set_attribute.(m[v][:,:,s], [Stage(s)])
+    for v in vs
+        cart_indexes = build_cartesian_indexes(m[v])
+        for s in 1:num_stages
+            set_attribute.(m[v][cart_indexes, s], [Stage(s)])
+        end
     end
 end
 
@@ -109,20 +119,18 @@ end
 function add_system_elements!(m::LDRModel, ses::Hydros, num_blocks::Int, num_stages::Int)
     num_hydros = length(ses)
 
-    # dimensao 2 gambiarrada com comprimento 1 para manter consistencia com todo o resto em
-    # set_stage_attribute!
     m[STORED_VOLUME] = JuMP.@variable(
-        m, [n = 1:num_hydros, k = 1, s = 1:num_stages], base_name = String(STORED_VOLUME),
+        m, [n = 1:num_hydros, s = 1:num_stages], base_name = String(STORED_VOLUME),
     )
 
     for n in 1:num_hydros, s in 1:num_stages
-        JuMP.set_lower_bound(m[STORED_VOLUME][n, 1, s], ses.entities[n].min_storage)
-        JuMP.set_upper_bound(m[STORED_VOLUME][n, 1, s], ses.entities[n].max_storage)
+        JuMP.set_lower_bound(m[STORED_VOLUME][n, s], ses.entities[n].min_storage)
+        JuMP.set_upper_bound(m[STORED_VOLUME][n, s], ses.entities[n].max_storage)
     end
 
     # dimensao 2 gambiarrada com comprimento 1 para manter consistencia com todo o resto em
     # set_stage_attribute!
-    m[INFLOW] = JuMP.@variable(m, [1:num_hydros, 1, 1:num_stages], base_name = String(INFLOW))
+    m[INFLOW] = JuMP.@variable(m, [1:num_hydros, 1:num_stages], base_name = String(INFLOW))
 
     m[TURBINED_FLOW] = JuMP.@variable(
         m, [1:num_hydros, 1:num_blocks, 1:num_stages], base_name = String(TURBINED_FLOW)
