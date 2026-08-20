@@ -5,11 +5,13 @@ authors = ["lucas-khenayfis"]
 
 [deps]
 HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
+JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
 LinearDecisionRules = "ee4db4e3-7eec-47e5-9935-9699b02754f6"
 SDDPlab = "5c1c4b2a-157d-4661-af07-65cbafd6173d"
 
 [compat]
 HiGHS = "1.24.1"
+JuMP = "1.31.2"
 LinearDecisionRules = "0.3.0"
 SDDPlab = "3.0.0"
 julia = "1.10.10"
