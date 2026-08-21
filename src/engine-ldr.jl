@@ -13,15 +13,10 @@ function lab2LDR(path::String, optimizer)::LDRModel
 
     num_stages = get_number_of_stages(get_graph(scenarios))
 
-    # hard-coded por enquanto, atende para a maioria dos estudos
-    # lab atual suporta patamares parametrizados diferentes a cada estagio, o que e um problema aqui
-    # gera arrays muito irregulares de variaveis de decisao
-    num_blocks = 1
-    block_mode = :parallel
-
     m = LDRModel(optimizer)
 
-    add_system_elements!(m, system, num_blocks, num_stages)
+    add_system_elements!(m, system, num_stages)
+    add_hydro_balance!(m, get_hydros(system))
 end
 
 # STAGE ATTRIBUTE ----------------------------------------------------------------------------------
@@ -50,14 +45,14 @@ end
 
 # SYSTEM ELEMENT ADDERS ----------------------------------------------------------------------------
 
-function add_system_elements!(m::LDRModel, ses::Buses, num_blocks::Int, num_stages::Int)
+function add_system_elements!(m::LDRModel, ses::Buses, num_stages::Int)
     num_buses = length(ses)
 
-    m[LOAD] = JuMP.@variable(m, [1:num_buses, 1:num_blocks, 1:num_stages], base_name = String(LOAD))
-    m[DEFICIT] = JuMP.@variable(m, [1:num_buses, 1:num_blocks, 1:num_stages], base_name = String(DEFICIT))
+    m[LOAD] = JuMP.@variable(m, [1:num_buses, 1:num_stages], base_name = String(LOAD))
+    m[DEFICIT] = JuMP.@variable(m, [1:num_buses, 1:num_stages], base_name = String(DEFICIT))
     
-    for n in 1:num_buses, k in 1:num_blocks, s in 1:num_stages
-        JuMP.set_lower_bound(m[DEFICIT][n, k, s], 0)
+    for n in 1:num_buses, s in 1:num_stages
+        JuMP.set_lower_bound(m[DEFICIT][n, s], 0)
     end
 
     set_stage_attribute!(m, [LOAD, DEFICIT], num_stages)
@@ -65,29 +60,29 @@ function add_system_elements!(m::LDRModel, ses::Buses, num_blocks::Int, num_stag
     return nothing
 end
 
-function add_system_elements!(m::LDRModel, ses::Lines, num_blocks::Int, num_stages::Int)
+function add_system_elements!(m::LDRModel, ses::Lines, num_stages::Int)
     num_lines = length(ses)
 
     m[DIRECT_EXCHANGE] = JuMP.@variable(
-        m, [1:num_lines, 1:num_blocks, 1:num_stages], base_name = String(DIRECT_EXCHANGE)
+        m, [1:num_lines, 1:num_stages], base_name = String(DIRECT_EXCHANGE)
     )
-    for n in 1:num_lines, k in 1:num_blocks, s in 1:num_stages
-        JuMP.set_lower_bound(m[DIRECT_EXCHANGE][n, k, s], 0)
-        JuMP.set_upper_bound(m[DIRECT_EXCHANGE][n, k, s], ses.entities[n].capacity)
+    for n in 1:num_lines, s in 1:num_stages
+        JuMP.set_lower_bound(m[DIRECT_EXCHANGE][n, s], 0)
+        JuMP.set_upper_bound(m[DIRECT_EXCHANGE][n, s], ses.entities[n].capacity)
     end
 
     m[REVERSE_EXCHANGE] = JuMP.@variable(
-        m, [1:num_lines, 1:num_blocks, 1:num_stages], base_name = String(REVERSE_EXCHANGE)
+        m, [1:num_lines, 1:num_stages], base_name = String(REVERSE_EXCHANGE)
     )
-    for n in 1:num_lines, k in 1:num_blocks, s in 1:num_stages
-        JuMP.set_lower_bound(m[REVERSE_EXCHANGE][n, k, s], 0)
-        JuMP.set_upper_bound(m[REVERSE_EXCHANGE][n, k, s], ses.entities[n].capacity)
+    for n in 1:num_lines, s in 1:num_stages
+        JuMP.set_lower_bound(m[REVERSE_EXCHANGE][n, s], 0)
+        JuMP.set_upper_bound(m[REVERSE_EXCHANGE][n, s], ses.entities[n].capacity)
     end
 
     return m[NET_EXCHANGE] = JuMP.@expression(
         m,
-        [n = 1:num_lines, k = 1:num_blocks, 1:num_stages],
-        m[DIRECT_EXCHANGE][n, k, s] - m[REVERSE_EXCHANGE][n, k, s]
+        [n = 1:num_lines, 1:num_stages],
+        m[DIRECT_EXCHANGE][n, s] - m[REVERSE_EXCHANGE][n, s]
     )
 
     set_stage_attribute!(m, [DIRECT_EXCHANGE, REVERSE_EXCHANGE, NET_EXCHANGE], num_blocks)
@@ -95,20 +90,20 @@ function add_system_elements!(m::LDRModel, ses::Lines, num_blocks::Int, num_stag
     return nothing
 end
 
-function add_system_elements!(m::LDRModel, ses::Thermals, num_blocks::Int, num_stages::Int)
+function add_system_elements!(m::LDRModel, ses::Thermals, num_stages::Int)
     num_thermals = length(ses)
     m[THERMAL_GENERATION] = JuMP.@variable(
-        m, [1:num_thermals, 1:num_blocks, 1:num_stages], base_name = String(THERMAL_GENERATION)
+        m, [1:num_thermals, 1:num_stages], base_name = String(THERMAL_GENERATION)
     )
-    for n in 1:num_thermals, k in 1:num_blocks, s in 1:num_stages
-        JuMP.set_lower_bound(m[THERMAL_GENERATION][n, k, s], ses.entities[n].min_generation)
-        JuMP.set_upper_bound(m[THERMAL_GENERATION][n, k, s], ses.entities[n].max_generation)
+    for n in 1:num_thermals, s in 1:num_stages
+        JuMP.set_lower_bound(m[THERMAL_GENERATION][n, s], ses.entities[n].min_generation)
+        JuMP.set_upper_bound(m[THERMAL_GENERATION][n, s], ses.entities[n].max_generation)
     end
 
     m[THERMAL_GENERATION_COST] = JuMP.@expression(
         m,
-        [n = 1:num_thermals, k = 1:num_blocks, s = 1:num_stages],
-        ses.entities[n].cost * m[THERMAL_GENERATION][n, k, s]
+        [n = 1:num_thermals, s = 1:num_stages],
+        ses.entities[n].cost * m[THERMAL_GENERATION][n, s]
     )
 
     set_stage_attribute!(m, THERMAL_GENERATION, num_stages)
@@ -116,7 +111,7 @@ function add_system_elements!(m::LDRModel, ses::Thermals, num_blocks::Int, num_s
     return nothing
 end
 
-function add_system_elements!(m::LDRModel, ses::Hydros, num_blocks::Int, num_stages::Int)
+function add_system_elements!(m::LDRModel, ses::Hydros, num_stages::Int)
     num_hydros = length(ses)
 
     m[STORED_VOLUME] = JuMP.@variable(
@@ -133,47 +128,47 @@ function add_system_elements!(m::LDRModel, ses::Hydros, num_blocks::Int, num_sta
     m[INFLOW] = JuMP.@variable(m, [1:num_hydros, 1:num_stages], base_name = String(INFLOW))
 
     m[TURBINED_FLOW] = JuMP.@variable(
-        m, [1:num_hydros, 1:num_blocks, 1:num_stages], base_name = String(TURBINED_FLOW)
+        m, [1:num_hydros, 1:num_stages], base_name = String(TURBINED_FLOW)
     )
-    for n in 1:num_hydros, k in 1:num_blocks, s in 1:num_stages
+    for n in 1:num_hydros, s in 1:num_stages
         JuMP.set_lower_bound(
-            m[TURBINED_FLOW][n, k, s],
+            m[TURBINED_FLOW][n, s],
             ses.entities[n].min_generation / ses.entities[n].productivity,
         )
         JuMP.set_upper_bound(
-            m[TURBINED_FLOW][n, k, s],
+            m[TURBINED_FLOW][n, s],
             ses.entities[n].max_generation / ses.entities[n].productivity,
         )
     end
 
     m[SPILLAGE] = JuMP.@variable(
-        m, [1:num_hydros, 1:num_blocks, 1:num_stages], base_name = String(SPILLAGE)
+        m, [1:num_hydros, 1:num_stages], base_name = String(SPILLAGE)
     )
-    for n in 1:num_hydros, k in 1:num_blocks, s in 1:num_stages
-        JuMP.set_lower_bound(m[SPILLAGE][n, k, s], 0)
+    for n in 1:num_hydros, s in 1:num_stages
+        JuMP.set_lower_bound(m[SPILLAGE][n, s], 0)
     end
 
     m[OUTFLOW] = JuMP.@expression(
-        m, [n = 1:num_hydros, k = 1:num_blocks, s = 1:num_stages], m[TURBINED_FLOW][n, k, s] + m[SPILLAGE][n, k, s]
+        m, [n = 1:num_hydros, s = 1:num_stages], m[TURBINED_FLOW][n, s] + m[SPILLAGE][n, s]
     )
 
     m[HYDRO_GENERATION] = JuMP.@expression(
         m,
-        [n = 1:num_hydros, k = 1:num_blocks, s = 1:num_stages],
-        ses.entities[n].productivity * m[TURBINED_FLOW][n, k, s]
+        [n = 1:num_hydros, s = 1:num_stages],
+        ses.entities[n].productivity * m[TURBINED_FLOW][n, s]
     )
 
     m[HYDRO_MIN_GENERATION_SLACK] = JuMP.@variable(
-        m, [1:num_hydros, 1:num_blocks, 1:num_stages], base_name = String(HYDRO_MIN_GENERATION_SLACK)
+        m, [1:num_hydros, 1:num_stages], base_name = String(HYDRO_MIN_GENERATION_SLACK)
     )
-    for n in 1:num_hydros, k in 1:num_blocks, s in 1:num_stages
-        JuMP.set_lower_bound(m[HYDRO_MIN_GENERATION_SLACK][n, k, s], 0)
+    for n in 1:num_hydros, s in 1:num_stages
+        JuMP.set_lower_bound(m[HYDRO_MIN_GENERATION_SLACK][n, s], 0)
     end
 
     JuMP.@constraint(
         m,
-        [n = 1:num_hydros, k = 1:num_blocks, s = 1:num_stages],
-        m[HYDRO_GENERATION][n, k, s] + m[HYDRO_MIN_GENERATION_SLACK][n, k, s] >=
+        [n = 1:num_hydros, s = 1:num_stages],
+        m[HYDRO_GENERATION][n, s] + m[HYDRO_MIN_GENERATION_SLACK][n, s] >=
             ses.entities[n].min_generation
     )
 
@@ -186,71 +181,29 @@ function add_system_elements!(m::LDRModel, ses::Hydros, num_blocks::Int, num_sta
     return nothing
 end
 
-function add_system_elements!(m::LDRModel, ses::SystemData, num_blocks::Int, num_stages::Int)
-    add_system_elements!(m, get_buses(ses), num_blocks, num_stages)
-    add_system_elements!(m, get_lines(ses), num_blocks, num_stages)
-    add_system_elements!(m, get_thermals(ses), num_blocks, num_stages)
-    add_system_elements!(m, get_hydros(ses), num_blocks, num_stages)
+function add_system_elements!(m::LDRModel, ses::SystemData, num_stages::Int)
+    add_system_elements!(m, get_buses(ses), num_stages)
+    add_system_elements!(m, get_lines(ses), num_stages)
+    add_system_elements!(m, get_thermals(ses), num_stages)
+    add_system_elements!(m, get_hydros(ses), num_stages)
     return nothing
 end
 
 # HYDRO BALANCE ------------------------------------------------------------------------------------
 
-function add_hydro_balance_parallel!(
-    m::JuMP.Model,
-    hydros::Hydros,
-    zeta::Float64,
-    w_k::Vector{Float64},
-    num_blocks::Int,
-    num_stages::Int
-)
+function add_hydro_balance!(m::LDRModel, hydros::Hydros)
     num_hydros = length(hydros)
 
     m[HYDRO_BALANCE] = JuMP.@constraint(
         m,
         [n = 1:num_hydros, s = 1:num_stages],
-        
         m[STORED_VOLUME][n, s] ==
-            ifelse(s == 1, hydros[n].initial_storage, m[STORED_VOLUME][n, s-1]) + zeta * m[INFLOW][n, s] -
-        zeta * sum(w_k[k] * m[OUTFLOW][n, k, s] for k in 1:num_blocks) +
-
-        zeta * sum(
-            w_k[k] * m[OUTFLOW][j, k, s] for j in 1:num_hydros if
-            downstream(hydros.entities[j].id, hydros) == hydros.entities[n] for
-            k in 1:num_blocks
-        ) -
-
-        zeta * sum(
-            w_k[k] * m[PUMPED_FLOW][j, k, s] for j in get(pump_source_map, n, Int[]) for
-            k in 1:num_blocks
-        ) +
-
-        zeta * sum(
-            w_k[k] * m[PUMPED_FLOW][j, k, s] for j in get(pump_dest_map, n, Int[]) for
-            k in 1:num_blocks
+            (s > 1 ? m[STORED_VOLUME][n, s-1] : hydros.entities[n].initial_storage) - m[OUTFLOW][n] +
+        m[INFLOW][n, s] +
+        sum(
+            m[OUTFLOW][j, s] for j in 1:num_hydros if
+            downstream(hydros.entities[j].id, hydros) == hydros.entities[n]
         )
     )
-    return nothing
-end
-
-function add_hydro_balance!(
-    m::JuMP.Model,
-    hydros::Hydros,
-    block_mode::Symbol,
-    tau_k::Vector{Float64},
-    num_blocks::Int,
-    num_stages::Int
-)
-    w_k = get_block_weights(tau_k)
-
-    if block_mode == :parallel
-        zeta = 0.0036 * sum(tau_k)
-        add_hydro_balance_parallel!(m, hydros, zeta, w_k, num_blocks, num_stages)
-    elseif block_mode == :chronological
-        zeta_k = 0.0036 .* tau_k
-        add_hydro_balance_chronological!(m, hydros, zeta_k, w_k, num_blocks, num_stages)
-    else
-        error("Unknown block mode: $block_mode. Expected :parallel or :chronological.")
-    end
     return nothing
 end
