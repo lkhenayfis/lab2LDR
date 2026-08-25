@@ -17,6 +17,7 @@ function lab2LDR(path::String, optimizer)::LDRModel
 
     add_system_elements!(m, system, num_stages)
     add_hydro_balance!(m, get_hydros(system))
+    add_load_balance!(m, files, num_stages)
 end
 
 # STAGE ATTRIBUTE ----------------------------------------------------------------------------------
@@ -189,7 +190,7 @@ function add_system_elements!(m::LDRModel, ses::SystemData, num_stages::Int)
     return nothing
 end
 
-# HYDRO BALANCE ------------------------------------------------------------------------------------
+# BALANCE CONSTRAINTS ------------------------------------------------------------------------------
 
 function add_hydro_balance!(m::LDRModel, hydros::Hydros)
     num_hydros = length(hydros)
@@ -207,3 +208,43 @@ function add_hydro_balance!(m::LDRModel, hydros::Hydros)
     )
     return nothing
 end
+
+function add_load_balance!(m::LDRModel, files::Vector{InputModule}, num_stages::Int)
+    system = get_system(files)
+    hydros_entities = get_hydros_entities(system)
+    thermals_entities = get_thermals_entities(system)
+    lines_entities = get_lines_entities(system)
+    scenarios = get_scenarios(files)
+    bus_ids = get_ids(get_buses(system))
+
+    num_buses = length(bus_ids)
+    num_lines = length(lines_entities)
+    num_hydros = length(hydros_entities)
+    num_thermals = length(thermals_entities)
+
+    m[LOAD_BALANCE] = JuMP.@constraint(
+        m,
+        [n = 1:num_buses, s = 1:num_stages],
+        sum(
+            m[HYDRO_GENERATION][j, s] for
+            j in 1:num_hydros if hydros_entities[j].bus_id == bus_ids[n]
+        ) +
+        sum(
+            m[THERMAL_GENERATION][j, s] for
+            j in 1:num_thermals if thermals_entities[j].bus_id == bus_ids[n]
+        ) +
+        sum(
+            m[DIRECT_EXCHANGE][j, s] - m[REVERSE_EXCHANGE][j, s] for
+            j in 1:num_lines if lines_entities[j].target_bus_id == bus_ids[n]
+        ) +
+        sum(
+            m[REVERSE_EXCHANGE][j, s] - m[DIRECT_EXCHANGE][j, s] for
+            j in 1:num_lines if lines_entities[j].source_bus_id == bus_ids[n]
+        ) +
+        m[DEFICIT][n, s] == get_load(bus_ids[n], s, scenarios)
+    )
+    return nothing
+end
+
+# UNCERTAINTY --------------------------------------------------------------------------------------
+
