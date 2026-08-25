@@ -10,6 +10,7 @@ function lab2LDR(path::String, optimizer)::LDRModel
 
     system = SDDPlab.get_system(files)
     scenarios = SDDPlab.get_scenarios(files)
+    stochastic = SDDPlab.get_stochastic_process(scenarios.inflow)
 
     num_stages = get_number_of_stages(get_graph(scenarios))
 
@@ -124,9 +125,7 @@ function add_system_elements!(m::LDRModel, ses::Hydros, num_stages::Int)
         JuMP.set_upper_bound(m[STORED_VOLUME][n, s], ses.entities[n].max_storage)
     end
 
-    # dimensao 2 gambiarrada com comprimento 1 para manter consistencia com todo o resto em
-    # set_stage_attribute!
-    m[INFLOW] = JuMP.@variable(m, [1:num_hydros, 1:num_stages], base_name = String(INFLOW))
+    #m[INFLOW] = JuMP.@variable(m, [1:num_hydros, 1:num_stages], base_name = String(INFLOW))
 
     m[TURBINED_FLOW] = JuMP.@variable(
         m, [1:num_hydros, 1:num_stages], base_name = String(TURBINED_FLOW)
@@ -175,7 +174,7 @@ function add_system_elements!(m::LDRModel, ses::Hydros, num_stages::Int)
 
     set_stage_attribute!(
         m,
-        [STORED_VOLUME, INFLOW, TURBINED_FLOW, SPILLAGE, HYDRO_MIN_GENERATION_SLACK],
+        [STORED_VOLUME, TURBINED_FLOW, SPILLAGE, HYDRO_MIN_GENERATION_SLACK],
         num_stages
     )
 
@@ -248,3 +247,140 @@ end
 
 # UNCERTAINTY --------------------------------------------------------------------------------------
 
+function get_models_per_stage(stch::Naive)::Vector{Vector{T} where T <: Distribution}
+    num_hydros, num_stages = size(stch)
+    models = []
+    for i in 1:num_stages
+        stage_i = [stch.models[j].distributions[i] for j in 1:num_hydros]
+        push!(models, stage_i)
+    end
+    
+    return models
+end
+
+function get_copulas_per_stage(stch::Naive)::Vector{Copula}
+    [stch.copulas[j] for j in range(1, size(stch, 2))]
+end
+
+function validate_univar_gaussian(models_per_stage)
+    valid = true
+    for stage_i in models_per_stage
+        for dist in stage_i
+            valid = valid & (isa(dist, Normal) | isa(dist, LogNormal))
+        end
+    end
+    
+    if !valid
+        error("todas as distribuicoes univariadas devem ser Normais ou LogNormais")
+    else
+        return true
+    end
+end
+
+function validate_copulas_kind(copulas_per_stage)
+    valid = true
+    for copula in copulas_per_stage
+        valid = valid & (isa(copula, IndependentCopula) | isa(copula, GaussianCopula))
+    end
+
+    if !valid
+        error("todas as copulas devem ser Independentes ou Gaussianas")
+    else
+        return true
+    end
+end
+
+function validate_stch_for_ldr(stch::Naive)
+    models = get_models_per_stage(stch)
+    copulas = get_copulas_per_stage(stch)
+    aux = validate_univar_gaussian(models) && validate_copulas_kind(copulas)
+    return models, copulas
+end
+
+function copula2Σ(c::IndependentCopula)
+    diagm(repeat([0], length(c)))
+end
+
+function copula2Σ(c::GaussianCopula)
+    Σ = c.Σ
+    Σ[diagind(Σ)] .= 0.0
+    return Σ
+end
+
+function build_stage_ldruncertainty_1d(
+    stage_models::Vector{T} where T <: Distribution,
+    stage_copula::Copula
+    )::UnivariateDistribution
+
+    mod = stage_models[1]
+    if isa(mod, Normal) mod = truncated(mod, 0.0) end
+
+    return stage_models[1]
+end
+
+function build_stage_ldruncertainty_Nd(
+    stage_models::Vector{T} where T <: Distribution,
+    stage_copula::Copula
+    )::UnivariateDistribution
+
+    means = [m.μ for m in stage_models]
+    stds = [m.σ for m in stage_models]
+
+    Σ = diagm(stds) + copula2Σ(stage_copula)
+
+    if isa(stage_models[1], Normal)
+        return MvNormal(means, Σ)
+    elseif isa(stage_models[1], LogNormal)
+        return MvLogNormal(means, Σ)
+    end
+end
+
+function build_stage_ldruncertainty(
+    stage_models::Vector{T} where T <: Distribution,
+    stage_copula::Copula
+    )::UnivariateDistribution
+
+    if length(stage_models) == 1
+        build_stage_ldruncertainty_1d(stage_models, stage_copula)
+    else
+        build_stage_ldruncertainty_Nd(stage_models, stage_copula)
+    end
+end
+
+function stch2ldruncertainty(stch::Naive)::Vector{Distribution}
+    models, copulas = validate_stch_for_ldr(stch)
+
+    mvdists = []
+    for (m,c) in zip(models, copulas)
+        push!(mvdists, build_stage_ldruncertainty(m, c))
+    end
+
+    return mvdists
+end
+
+function determinisitic_stage1(dists::Vector{Distribution})::Vector{Float64}
+    dist1 = dists[1]
+    isa(dist1, UnivariateDistribution) ? [mean(dist1)] : mean(dist1)
+end
+
+function add_inflow!(m::LDRModel, hydros::Hydros, stch::Naive)
+    num_hydros, num_stages = size(stch)
+
+    ldr_dists = stch2ldruncertainty(stch)
+    stage_1 = determinisitic_stage1(ldr_dists)
+
+    m[INFLOW_1] = JuMP.@variable(m, [1:num_hydros], base_name = String(INFLOW_1))
+    for n in 1:num_hydros
+        JuMP.fix(m[INFLOW_1][n], stage_1[n])
+    end
+
+    for s in 2:num_stages
+        var = Symbol("INFLOW_" * string(s))
+        m[var] = JuMP.@variable(
+            m,
+            [1:num_hydros],
+            base_name = String(var),
+            set = Uncertainty(; distribution = ldr_dists[s])
+        )
+    end
+end

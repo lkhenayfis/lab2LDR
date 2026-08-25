@@ -1,17 +1,13 @@
 module lab2ldr
 
-# loads with import so exported names don't come to the module
-# currently LinearDecisionRules does not export any names but if this eventually changes it will
-# create a conflict with our LDRModel
+using Distributions, Copulas, LinearAlgebra
 using LinearDecisionRules
-import LinearDecisionRules: LDRModel, Stage
 using JuMP
 using SDDPlab
 
-struct LDREngine <: Engine end
+import LinearDecisionRules: LDRModel, Stage, Uncertainty
+import Copulas: Copula
 
-struct LDRModel <: Model
-    model::LinearDecisionRules.LDRModel
-end
+include("variables.jl")
 
 end
