@@ -160,23 +160,9 @@ function add_system_elements!(m::LDRModel, ses::Hydros, num_stages::Int)
         ses.entities[n].productivity * m[TURBINED_FLOW][n, s]
     )
 
-    m[HYDRO_MIN_GENERATION_SLACK] = JuMP.@variable(
-        m, [1:num_hydros, 1:num_stages], base_name = String(HYDRO_MIN_GENERATION_SLACK)
-    )
-    for n in 1:num_hydros, s in 1:num_stages
-        JuMP.set_lower_bound(m[HYDRO_MIN_GENERATION_SLACK][n, s], 0)
-    end
-
-    JuMP.@constraint(
-        m,
-        [n = 1:num_hydros, s = 1:num_stages],
-        m[HYDRO_GENERATION][n, s] + m[HYDRO_MIN_GENERATION_SLACK][n, s] >=
-            ses.entities[n].min_generation
-    )
-
     set_stage_attribute!(
         m,
-        [STORED_VOLUME, TURBINED_FLOW, SPILLAGE, HYDRO_MIN_GENERATION_SLACK],
+        [STORED_VOLUME, TURBINED_FLOW, SPILLAGE],
         num_stages
     )
 
@@ -531,10 +517,6 @@ function add_objective!(m::LDRModel, s::SystemData, stch::Naive)
             sum(buses[n].deficit_cost * m[DEFICIT][n,s] for n in 1:nb, s in 1:ns) +
             sum(lines[n].exchange_penalty * m[DIRECT_EXCHANGE][n,s] for n in 1:nl, s in 1:ns) +
             sum(lines[n].exchange_penalty * m[REVERSE_EXCHANGE][n,s] for n in 1:nl, s in 1:ns) +
-            sum(
-                hydros[n].bus[].deficit_cost * 1.0001 * m[HYDRO_MIN_GENERATION_SLACK][n,s] for
-                n in 1:nh, s in 1:ns
-            ) +
             sum(hydros[n].spillage_penalty * m[SPILLAGE][n,s] for n in 1:nh, s in 1:ns)
     )
 end
