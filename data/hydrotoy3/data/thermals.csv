@@ -1,0 +1,4 @@
+id ,name   ,bus_id ,min_generation ,max_generation ,cost
+ 1 ,"UTE1" ,     1 ,           0.0 ,          10.0 ,250.0
+ 2 ,"UTE2" ,     1 ,           0.0 ,           5.0 ,750.0
+ 3 ,"UTE3" ,     1 ,           0.0 ,           5.0 ,1750.0
