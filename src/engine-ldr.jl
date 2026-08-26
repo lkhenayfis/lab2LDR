@@ -4,7 +4,7 @@
 
 Le a configuracao de estudo do lab em `path` e monta um objeto LDRModel correspondente
 """
-function build_model(path::String, optimizer)::LDRModel
+function build_model(path::String, optimizer; n_breakpoints = 0)::LDRModel
     study = SDDPlab.read_study(path)
     files = study.inputs.files
 
@@ -17,9 +17,10 @@ function build_model(path::String, optimizer)::LDRModel
     m = LDRModel(optimizer)
 
     add_system_elements!(m, system, num_stages)
-    add_inflow!(m, stochastic)
+    add_inflow!(m, stochastic; n_breakpoints = n_breakpoints)
     add_hydro_balance!(m, get_hydros(system), stochastic)
     add_load_balance!(m, files, num_stages)
+    add_objective!(m, system, stochastic)
 
     return m
 end
@@ -358,7 +359,7 @@ function determinisitic_stage1(dist::Distribution)::Vector{Float64}
     isa(dist, UnivariateDistribution) ? [mean(dist)] : mean(dist)
 end
 
-function add_inflow!(m::LDRModel, stch::Naive)
+function add_inflow!(m::LDRModel, stch::Naive; n_breakpoints = 0)
     num_hydros, num_stages = size(stch)
 
     ldr_dists = stch2ldruncertainty(stch)
@@ -370,21 +371,30 @@ function add_inflow!(m::LDRModel, stch::Naive)
     end
 
     for s in 2:num_stages
-        add_uncertain_inflow!(m, s, ldr_dists[s])
+        add_uncertain_inflow!(m, s, ldr_dists[s], n_breakpoints = n_breakpoints)
     end
 end
 
-function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::UnivariateDistribution)
+function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::UnivariateDistribution;
+    n_breakpoints = 0)
+
     varname = Symbol("INFLOW_" * string(stage))
     m[varname] = JuMP.@variable(
         m,
         base_name = String(varname),
         set = Uncertainty(; distribution = dist)
     )
+
+    if n_breakpoints > 0
+        JuMP.set_attribute(m[varname], BreakPoints(), n_breakpoints)
+    end
+
     return nothing
 end
 
-function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::ProductDistribution)
+function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::ProductDistribution;
+    n_breakpoints = 0)
+
     size = length(dist)
     varname = Symbol("INFLOW_" * string(stage))
     m[varname] = JuMP.@variable(
@@ -393,10 +403,18 @@ function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::ProductDistributio
         base_name = String(varname),
         set = Uncertainty(; distribution = dist)
     )
+    
+    if n_breakpoints > 0
+        for n in 1:size
+            JuMP.set_attribute(m[varname][n], BreakPoints(), n_breakpoints)
+        end
+    end
+        
     return nothing
 end
 
-function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::MultivariateNormal; alpha = .95)
+function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::MultivariateNormal;
+    n_breakpoints = 0, alpha = .95)
     size = length(dist)
     dist = LinearDecisionRules.ConfidenceMvNormal(dist.μ, dist.Σ, alpha)
     varname = Symbol("INFLOW_" * string(stage))
@@ -406,5 +424,40 @@ function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::MultivariateNormal
         base_name = String(varname),
         set = Uncertainty(; distribution = dist)
     )
+    
+    if n_breakpoints > 0
+        for n in 1:size
+            JuMP.set_attribute(m[varname][n], BreakPoints(), n_breakpoints)
+        end
+    end
+
     return nothing
+end
+
+# OBJECTIVE FUNCTION -------------------------------------------------------------------------------
+
+function add_objective!(m::LDRModel, s::SystemData, stch::Naive)
+    hydros = get_hydros_entities(s)
+    buses = get_buses_entities(s)
+    lines = get_lines_entities(s)
+    thermals = get_thermals_entities(s)
+    nb = length(buses)
+    nl = length(lines)
+    nh = length(hydros)
+    nt = length(thermals)
+    ns = size(stch, 2)
+
+    @objective(
+        m,
+        Min,
+            sum(thermals[n].cost * m[THERMAL_GENERATION][n,s] for n in 1:nt, s in 1:ns) +
+            sum(buses[n].deficit_cost * m[DEFICIT][n,s] for n in 1:nb, s in 1:ns) +
+            sum(lines[n].exchange_penalty * m[DIRECT_EXCHANGE][n,s] for n in 1:nl, s in 1:ns) +
+            sum(lines[n].exchange_penalty * m[REVERSE_EXCHANGE][n,s] for n in 1:nl, s in 1:ns) +
+            sum(
+                hydros[n].bus[].deficit_cost * 1.0001 * m[HYDRO_MIN_GENERATION_SLACK][n,s] for
+                n in 1:nh, s in 1:ns
+            ) +
+            sum(hydros[n].spillage_penalty * m[SPILLAGE][n,s] for n in 1:nh, s in 1:ns)
+    )
 end
