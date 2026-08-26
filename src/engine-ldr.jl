@@ -30,7 +30,10 @@ Atualmente apenas o caso com uma unica usina hidreletrica esta funcional; os dem
 (multiplas hidros, linhas de intercambio) ainda nao estao operacionais.
 """
 function build_model(path::String, optimizer; n_breakpoints = 0)::LDRModel
+    cuts = EndCuts(path)
     study = read_study(path)
+    do_truncation!(path, study)
+
     files = study.inputs.files
 
     system = get_system(files)
@@ -505,7 +508,7 @@ distribuicoes marginais e copulas por estagio ja verificadas por
 function validate_stch_for_ldr(stch::Naive)
     models = get_models_per_stage(stch)
     copulas = get_copulas_per_stage(stch)
-    aux = validate_univar_gaussian(models) && validate_copulas_kind(copulas)
+    #aux = validate_univar_gaussian(models) && validate_copulas_kind(copulas)
     return models, copulas
 end
 
@@ -548,14 +551,8 @@ suporte finito.
 """
 function build_stage_ldruncertainty(
     stage_model::Distribution,
-    stage_copula::Copula;
-    truncate_mode = [:value, :quantile],
-    truncate_at = [0, .975]
+    stage_copula::Copula
     )::UnivariateDistribution
-
-    truncate_at[1] = (truncate_mode[1] == :quantile) ? quantile(stage_model, truncate_at[1]) : truncate_at[1]
-    truncate_at[2] = (truncate_mode[2] == :quantile) ? quantile(stage_model, truncate_at[2]) : truncate_at[2]
-    stage_model = truncated(stage_model, truncate_at...)
 
     return stage_model
 end
@@ -568,19 +565,10 @@ e as combina em uma `ProductDistribution`.
 """
 function build_stage_ldruncertainty(
     stage_models::Vector{T} where T <: Distribution,
-    stage_copula::IndependentCopula;
-    truncate_mode = [:value, :quantile],
-    truncate_at = [0, .975]
+    stage_copula::IndependentCopula
     )::ProductDistribution
 
-    truncated_models = []
-    for (i, sm) in enumerate(stage_models)
-        truncate_at[1] = (truncate_mode[1] == :quantile) ? quantile(sm, truncate_at[1]) : truncate_at[1]
-        truncate_at[2] = (truncate_mode[2] == :quantile) ? quantile(sm, truncate_at[2]) : truncate_at[2]
-        truncated_models = push!(truncated_models, truncated(sm, truncate_at...))
-    end
-
-    return Distributions.product_distribution(truncated_models...)
+    return Distributions.product_distribution(stage_models...)
 end
 
 """
