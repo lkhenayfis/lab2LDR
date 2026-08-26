@@ -5,9 +5,12 @@ using LinearDecisionRules
 using JuMP
 using SDDPlab
 
-import LinearDecisionRules: LDRModel, Stage, Uncertainty
+import LinearDecisionRules: LDRModel, Stage, Uncertainty, BreakPoints
 import Copulas: Copula
+import Distributions: ProductDistribution
 
-include("variables.jl")
+include("engine-ldr.jl")
+
+export build_model
 
 end

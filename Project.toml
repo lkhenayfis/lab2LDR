@@ -6,16 +6,20 @@ authors = ["lucas-khenayfis"]
 [deps]
 Copulas = "ae264745-0b69-425e-9d9d-cf662c5eec93"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+GLPK = "60bf3e95-4087-53dc-ae20-288a0d20c6a6"
 HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
 JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 LinearDecisionRules = "ee4db4e3-7eec-47e5-9935-9699b02754f6"
 SDDPlab = "5c1c4b2a-157d-4661-af07-65cbafd6173d"
 
 [compat]
 Copulas = "0.1.41"
 Distributions = "0.25.130"
+GLPK = "1.2.1"
 HiGHS = "1.24.1"
 JuMP = "1.31.2"
+LinearAlgebra = "1.12.0"
 LinearDecisionRules = "0.3.0"
 SDDPlab = "3.0.0"
 julia = "1.10.10"
