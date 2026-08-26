@@ -198,17 +198,37 @@ function add_hydro_balance!(m::LDRModel, hydros::Hydros, stch::Naive)
     num_stages = size(stch, 2)
 
     inflow_vars = [Symbol("INFLOW_" * string(s)) for s in 1:num_stages]
-    m[HYDRO_BALANCE] = JuMP.@constraint(
-        m,
-        [n = 1:num_hydros, s = 1:num_stages],
-        m[STORED_VOLUME][n, s] ==
-            (s > 1 ? m[STORED_VOLUME][n, s-1] : hydros.entities[n].initial_storage) - m[OUTFLOW][n] +
-        m[inflow_vars[s]][n] +
-        sum(
-            m[OUTFLOW][j, s] for j in 1:num_hydros if
-            downstream(hydros.entities[j].id, hydros) == hydros.entities[n]
+
+    # gambiarra para lidar com INFLOW_t tendo tipos diferentes
+    # no caso de incerteza univariada, a declaracao da variavel de inflow **PRECISA** ser escalar
+    # do contrario da erro do LinearDecisionRules
+    # sendo assim, quando tem so uma hidro todos os INFLOW_t sao escalares
+    # quando tem mais de uma elas sao vetores com comprimento num_stages
+    if num_hydros == 1
+        m[HYDRO_BALANCE] = JuMP.@constraint(
+            m,
+            [s = 1:num_stages],
+            m[STORED_VOLUME][1, s] ==
+                (s > 1 ? m[STORED_VOLUME][1, s-1] : hydros.entities[1].initial_storage) - m[OUTFLOW][1] +
+            m[inflow_vars[s]] +
+            sum(
+                m[OUTFLOW][j, s] for j in 1:num_hydros if
+                downstream(hydros.entities[j].id, hydros) == hydros.entities[1]
+            )
         )
-    )
+    else
+        m[HYDRO_BALANCE] = JuMP.@constraint(
+            m,
+            [n = 1:num_hydros, s = 1:num_stages],
+            m[STORED_VOLUME][n, s] ==
+                (s > 1 ? m[STORED_VOLUME][n, s-1] : hydros.entities[n].initial_storage) - m[OUTFLOW][n] +
+            m[inflow_vars[s]][n] +
+            sum(
+                m[OUTFLOW][j, s] for j in 1:num_hydros if
+                downstream(hydros.entities[j].id, hydros) == hydros.entities[n]
+            )
+        )
+    end
     return nothing
 end
 
@@ -394,9 +414,17 @@ function add_inflow!(m::LDRModel, stch::Naive; n_breakpoints = 0)
     ldr_dists = stch2ldruncertainty(stch)
     stage_1 = determinisitic_stage1(ldr_dists[1])
 
-    m[:INFLOW_1] = JuMP.@variable(m, [1:num_hydros], base_name = "INFLOW_1")
-    for n in 1:num_hydros
-        JuMP.fix(m[:INFLOW_1][n], stage_1[n])
+    # ate entao nao tem como declarar uma unica INFLOW matricial colocando cala coluna num Uncertainty
+    # set diferente
+    # Em funcao disso, estagio precisa ter a propria variavel de inflow
+    if num_hydros == 1
+        m[:INFLOW_1] = JuMP.@variable(m, base_name = "INFLOW_1")
+        JuMP.fix(m[:INFLOW_1], stage_1[1])
+    else
+        m[:INFLOW_1] = JuMP.@variable(m, [1:num_hydros], base_name = "INFLOW_1")
+        for n in 1:num_hydros
+            JuMP.fix(m[:INFLOW_1][n], stage_1[n])
+        end
     end
 
     for s in 2:num_stages
