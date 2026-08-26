@@ -11,7 +11,8 @@ import Distributions: ProductDistribution
 # As of the abstract-engine branch, SDDPlab no longer re-exports these names from
 # its top-level module; they live in (and are exported by) the submodules below.
 # We import exactly the names this bridge uses.
-import SDDPlab: read_study
+import SDDPlab: read_study, Study
+import SDDPlab.Utils: read_jsonc
 import SDDPlab.System:
     Buses,
     Lines,
@@ -48,6 +49,7 @@ import SDDPlab.Lab:
     HYDRO_BALANCE,
     LOAD_BALANCE
 
+include("input.jl")
 include("engine-ldr.jl")
 
 export build_model
