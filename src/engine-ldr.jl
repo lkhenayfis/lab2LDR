@@ -1,8 +1,33 @@
 
 """
-    lab2LDR(path::String)
+    build_model(path::String, optimizer; n_breakpoints = 0)::LDRModel
 
-Le a configuracao de estudo do lab em `path` e monta um objeto LDRModel correspondente
+Le a configuracao de estudo do lab (formato SDDPlab) em `path` e monta o `LDRModel`
+correspondente, pronto para ser otimizado.
+
+Esta e a funcao de entrada da ponte entre o SDDPlab e o LinearDecisionRules. Ela cumpre
+o mesmo papel de `Lab.build` no motor SDDP do laboratorio, porem montando o problema
+multiestagio como um modelo de regras de decisao lineares (LDR) ao inves de um modelo SDDP.
+
+Fluxo:
+1. `read_study` carrega o `main.jsonc` e demais arquivos de entrada;
+2. as variaveis de sistema (cargas, deficit, intercambios, termicas e hidros) sao criadas
+   por `add_system_elements!`;
+3. `add_inflow!` declara as variaveis de afluencia — deterministica no primeiro estagio e
+   incerta (`Uncertainty`) nos demais;
+4. `add_hydro_balance!` e `add_load_balance!` adicionam as restricoes de balanco hidrico e
+   de atendimento a carga;
+5. `add_objective!` define a funcao objetivo de minimizacao de custo.
+
+# Argumentos
+- `path`: diretorio do estudo contendo `main.jsonc`.
+- `optimizer`: fabrica de otimizador JuMP (ex.: `HiGHS.Optimizer`).
+- `n_breakpoints`: numero de pontos de quebra interiores para aproximar a regra de decisao
+  de cada afluencia incerta por partes (piecewise linear). `0` mantem a regra puramente afim.
+
+# Observacao
+Atualmente apenas o caso com uma unica usina hidreletrica esta funcional; os demais caminhos
+(multiplas hidros, linhas de intercambio) ainda nao estao operacionais.
 """
 function build_model(path::String, optimizer; n_breakpoints = 0)::LDRModel
     study = SDDPlab.read_study(path)
@@ -27,19 +52,43 @@ end
 
 # STAGE ATTRIBUTE ----------------------------------------------------------------------------------
 
+"""
+    build_cartesian_indexes(a::Array)
+
+Retorna o vetor de `CartesianIndex` que percorre todas as dimensoes de `a` exceto a ultima.
+
+E usada por `set_stage_attribute!` para iterar sobre os indices "de entidade" de um container
+de variaveis `[entidade..., estagio]`, mantendo a dimensao de estagio livre para ser fixada
+externamente.
+"""
 function build_cartesian_indexes(a::Array)
     dim = ndims(a)
     idx = [axes(a, i) for i in 1:(dim - 1)]
     return CartesianIndex.(idx...)
 end
 
+"""
+    set_stage_attribute!(m::LDRModel, v::Symbol, num_stages::Int)
+
+Marca todas as variaveis registradas em `m` sob a chave `v` com o atributo `Stage` do
+LinearDecisionRules, associando cada coluna (ultima dimensao do container) ao seu estagio.
+
+O `Stage` informa ao LDR em que estagio cada decisao e tomada, o que define quais variaveis
+sao nao-antecipativas (estagio 1) e quais podem adaptar-se afimente a incerteza revelada.
+"""
 function set_stage_attribute!(m::LDRModel, v::Symbol, num_stages::Int)
     cart_indexes = build_cartesian_indexes(m[v])
     for s in 1:num_stages
         set_attribute.(m[v][cart_indexes, s], [Stage(s)])
-    end 
+    end
 end
 
+"""
+    set_stage_attribute!(m::LDRModel, vs::Vector{Symbol}, num_stages::Int)
+
+Aplica [`set_stage_attribute!`](@ref) a cada chave de variavel em `vs`, marcando o atributo
+`Stage` para varios grupos de variaveis de uma vez.
+"""
 function set_stage_attribute!(m::LDRModel, vs::Vector{Symbol}, num_stages::Int)
     for v in vs
         cart_indexes = build_cartesian_indexes(m[v])
@@ -51,12 +100,19 @@ end
 
 # SYSTEM ELEMENT ADDERS ----------------------------------------------------------------------------
 
+"""
+    add_system_elements!(m::LDRModel, ses::Buses, num_stages::Int)
+
+Adiciona ao modelo as variaveis associadas aos barramentos: a carga (`LOAD`) e o deficit de
+atendimento (`DEFICIT`, restrito a valores nao-negativos), indexadas por barra e estagio, e
+registra o atributo de estagio de ambas.
+"""
 function add_system_elements!(m::LDRModel, ses::Buses, num_stages::Int)
     num_buses = length(ses)
 
     m[LOAD] = JuMP.@variable(m, [1:num_buses, 1:num_stages], base_name = String(LOAD))
     m[DEFICIT] = JuMP.@variable(m, [1:num_buses, 1:num_stages], base_name = String(DEFICIT))
-    
+
     for n in 1:num_buses, s in 1:num_stages
         JuMP.set_lower_bound(m[DEFICIT][n, s], 0)
     end
@@ -66,6 +122,18 @@ function add_system_elements!(m::LDRModel, ses::Buses, num_stages::Int)
     return nothing
 end
 
+"""
+    add_system_elements!(m::LDRModel, ses::Lines, num_stages::Int)
+
+Adiciona as variaveis de intercambio direto e reverso (`DIRECT_EXCHANGE`, `REVERSE_EXCHANGE`),
+limitadas pela capacidade de cada linha, e define a expressao de intercambio liquido
+(`NET_EXCHANGE`).
+
+!!! warning
+    Caminho ainda nao funcional. O codigo apos o primeiro `return` (incluindo
+    `set_stage_attribute!`) e inalcancavel e a variavel `num_blocks` nao esta definida neste
+    escopo. Mantido como esqueleto ate que o suporte a linhas seja implementado.
+"""
 function add_system_elements!(m::LDRModel, ses::Lines, num_stages::Int)
     num_lines = length(ses)
 
@@ -96,6 +164,13 @@ function add_system_elements!(m::LDRModel, ses::Lines, num_stages::Int)
     return nothing
 end
 
+"""
+    add_system_elements!(m::LDRModel, ses::Thermals, num_stages::Int)
+
+Adiciona as variaveis de geracao termica (`THERMAL_GENERATION`), limitadas pelos despachos
+minimo e maximo de cada usina, a expressao de custo de geracao (`THERMAL_GENERATION_COST`) e
+o atributo de estagio.
+"""
 function add_system_elements!(m::LDRModel, ses::Thermals, num_stages::Int)
     num_thermals = length(ses)
     m[THERMAL_GENERATION] = JuMP.@variable(
@@ -117,6 +192,16 @@ function add_system_elements!(m::LDRModel, ses::Thermals, num_stages::Int)
     return nothing
 end
 
+"""
+    add_system_elements!(m::LDRModel, ses::Hydros, num_stages::Int)
+
+Adiciona as variaveis hidraulicas: volume armazenado (`STORED_VOLUME`, entre os limites de
+armazenamento), vazao turbinada (`TURBINED_FLOW`, limitada pela geracao min/max dividida pela
+produtividade) e vertimento (`SPILLAGE`, nao-negativo). Define ainda as expressoes de vazao
+defluente total (`OUTFLOW = TURBINED_FLOW + SPILLAGE`) e de geracao hidraulica
+(`HYDRO_GENERATION = produtividade * TURBINED_FLOW`), e registra o atributo de estagio das
+variaveis de decisao.
+"""
 function add_system_elements!(m::LDRModel, ses::Hydros, num_stages::Int)
     num_hydros = length(ses)
 
@@ -169,6 +254,13 @@ function add_system_elements!(m::LDRModel, ses::Hydros, num_stages::Int)
     return nothing
 end
 
+"""
+    add_system_elements!(m::LDRModel, ses::SystemData, num_stages::Int)
+
+Conveniencia que adiciona ao modelo, em ordem, todos os grupos de elementos do sistema
+(barras, linhas, termicas e hidros) delegando aos metodos especializados de
+[`add_system_elements!`](@ref).
+"""
 function add_system_elements!(m::LDRModel, ses::SystemData, num_stages::Int)
     add_system_elements!(m, get_buses(ses), num_stages)
     add_system_elements!(m, get_lines(ses), num_stages)
@@ -179,6 +271,21 @@ end
 
 # BALANCE CONSTRAINTS ------------------------------------------------------------------------------
 
+"""
+    add_hydro_balance!(m::LDRModel, hydros::Hydros, stch::Naive)
+
+Adiciona a restricao de balanco hidrico (`HYDRO_BALANCE`) para cada usina e estagio:
+
+    volume[s] == volume_inicial[s-1] - defluencia + afluencia + defluencia_de_montante
+
+onde o volume do estagio anterior e substituido pelo armazenamento inicial no primeiro
+estagio, a afluencia e a variavel `INFLOW_s` correspondente ao estagio, e a soma de montante
+percorre as usinas cuja jusante (`downstream`) e a usina corrente.
+
+O ramo `num_hydros == 1` trata a afluencia como escalar (exigencia do LinearDecisionRules para
+incerteza univariada); o ramo com multiplas usinas usa afluencias vetoriais e ainda nao esta
+operacional.
+"""
 function add_hydro_balance!(m::LDRModel, hydros::Hydros, stch::Naive)
     num_hydros = length(hydros)
     num_stages = size(stch, 2)
@@ -218,6 +325,13 @@ function add_hydro_balance!(m::LDRModel, hydros::Hydros, stch::Naive)
     return nothing
 end
 
+"""
+    add_load_balance!(m::LDRModel, files::Vector{InputModule}, num_stages::Int)
+
+Adiciona a restricao de atendimento a carga (`LOAD_BALANCE`) por barra e estagio: a soma da
+geracao hidraulica e termica conectada a barra, do intercambio liquido que chega/sai e do
+deficit deve igualar a carga daquela barra e estagio (`get_load`).
+"""
 function add_load_balance!(m::LDRModel, files::Vector{InputModule}, num_stages::Int)
     system = get_system(files)
     hydros_entities = get_hydros_entities(system)
@@ -257,6 +371,12 @@ end
 
 # UNCERTAINTY --------------------------------------------------------------------------------------
 
+"""
+    get_models_per_stage_1d(stch::Naive)::Vector{<:Distribution}
+
+Extrai, para o caso de uma unica usina, o vetor de distribuicoes marginais de afluencia
+indexado por estagio a partir do processo estocastico `Naive`.
+"""
 function get_models_per_stage_1d(stch::Naive)::Vector{<:Distribution}
     num_stages = size(stch, 2)
     models = Vector{Distribution}()
@@ -267,6 +387,15 @@ function get_models_per_stage_1d(stch::Naive)::Vector{<:Distribution}
     return models
 end
 
+"""
+    get_models_per_stage_Nd(stch::Naive)::Vector{Vector{<:Distribution}}
+
+Extrai, para o caso multivariado, as distribuicoes marginais de afluencia organizadas como um
+vetor por estagio, cada um contendo a marginal de cada usina.
+
+!!! warning
+    Caminho ainda nao funcional: a variavel `num_hydros` nao esta definida neste escopo.
+"""
 function get_models_per_stage_Nd(stch::Naive)::Vector{Vector{<:Distribution}}
     num_stages = size(stch, 2)
     models = Vector{Vector{Distribution}}()
@@ -277,6 +406,13 @@ function get_models_per_stage_Nd(stch::Naive)::Vector{Vector{<:Distribution}}
     return models
 end
 
+"""
+    get_models_per_stage(stch::Naive)
+
+Despacha entre [`get_models_per_stage_1d`](@ref) e [`get_models_per_stage_Nd`](@ref) conforme o
+numero de usinas (`size(stch, 1)`), retornando as distribuicoes marginais de afluencia por
+estagio.
+"""
 function get_models_per_stage(stch::Naive)::Union{Vector{<:Distribution},Vector{Vector{<:Distribution}}}
     num_hydros = size(stch, 1)
 
@@ -285,20 +421,33 @@ function get_models_per_stage(stch::Naive)::Union{Vector{<:Distribution},Vector{
     else
         models = get_models_per_stage_Nd(stch)
     end
-    
+
     return models
 end
 
+"""
+    get_copulas_per_stage(stch::Naive)::Vector{Copula}
+
+Retorna o vetor de copulas do processo `Naive` indexado por estagio, usadas para descrever a
+dependencia entre as afluencias das usinas em cada estagio.
+"""
 function get_copulas_per_stage(stch::Naive)::Vector{Copula}
     [stch.copulas[j] for j in range(1, size(stch, 2))]
 end
 
+"""
+    validate_univar_gaussian(model_per_stage::Vector{<:Distribution})
+
+Garante que todas as marginais (caso univariado) sejam `Normal` ou `LogNormal` — as unicas
+familias suportadas pela reformulacao LDR desta ponte. Lanca erro caso contrario, retorna
+`true` se validas.
+"""
 function validate_univar_gaussian(model_per_stage::Vector{<:Distribution})
     valid = true
     for dist in model_per_stage
         valid = valid & (isa(dist, Normal) | isa(dist, LogNormal))
     end
-    
+
     if !valid
         error("todas as distribuicoes univariadas devem ser Normais ou LogNormais")
     else
@@ -306,6 +455,12 @@ function validate_univar_gaussian(model_per_stage::Vector{<:Distribution})
     end
 end
 
+"""
+    validate_univar_gaussian(models_per_stage::Vector{Vector{<:Distribution}})
+
+Versao multivariada: garante que toda marginal, em todos os estagios e usinas, seja `Normal`
+ou `LogNormal`.
+"""
 function validate_univar_gaussian(models_per_stage::Vector{Vector{<:Distribution}})
     valid = true
     for stage_i in models_per_stage
@@ -313,7 +468,7 @@ function validate_univar_gaussian(models_per_stage::Vector{Vector{<:Distribution
             valid = valid & (isa(dist, Normal) | isa(dist, LogNormal))
         end
     end
-    
+
     if !valid
         error("todas as distribuicoes univariadas devem ser Normais ou LogNormais")
     else
@@ -321,6 +476,12 @@ function validate_univar_gaussian(models_per_stage::Vector{Vector{<:Distribution
     end
 end
 
+"""
+    validate_copulas_kind(copulas_per_stage)
+
+Garante que todas as copulas sejam `IndependentCopula` ou `GaussianCopula` — as unicas
+compativeis com a construcao da incerteza gaussiana multivariada. Lanca erro caso contrario.
+"""
 function validate_copulas_kind(copulas_per_stage)
     valid = true
     for copula in copulas_per_stage
@@ -334,6 +495,13 @@ function validate_copulas_kind(copulas_per_stage)
     end
 end
 
+"""
+    validate_stch_for_ldr(stch::Naive)
+
+Valida o processo estocastico para uso no LDR e retorna a tupla `(models, copulas)` com as
+distribuicoes marginais e copulas por estagio ja verificadas por
+[`validate_univar_gaussian`](@ref) e [`validate_copulas_kind`](@ref).
+"""
 function validate_stch_for_ldr(stch::Naive)
     models = get_models_per_stage(stch)
     copulas = get_copulas_per_stage(stch)
@@ -341,16 +509,43 @@ function validate_stch_for_ldr(stch::Naive)
     return models, copulas
 end
 
+"""
+    copula2Σ(c::IndependentCopula)
+
+Converte uma copula independente na sua contribuicao para a matriz de covariancia: uma matriz
+diagonal nula (sem correlacao cruzada entre as afluencias).
+"""
 function copula2Σ(c::IndependentCopula)
     diagm(repeat([0], length(c)))
 end
 
+"""
+    copula2Σ(c::GaussianCopula)
+
+Extrai da copula gaussiana a matriz de correlacao apenas com os termos fora da diagonal
+(diagonal zerada), a ser somada aos desvios-padrao marginais na montagem da covariancia.
+
+!!! note
+    Modifica `c.Σ` in-place ao zerar a diagonal.
+"""
 function copula2Σ(c::GaussianCopula)
     Σ = c.Σ
     Σ[diagind(Σ)] .= 0.0
     return Σ
 end
 
+"""
+    build_stage_ldruncertainty(stage_model::Distribution, stage_copula::Copula; kwargs...)
+
+Constroi a distribuicao de incerteza univariada de um estagio, aplicando truncamento a
+marginal. O truncamento e necessario porque o `Uncertainty` do LinearDecisionRules exige
+suporte finito.
+
+# Argumentos por chave
+- `truncate_mode`: par `[modo_inf, modo_sup]`, cada um `:value` (limite absoluto) ou
+  `:quantile` (quantil da propria distribuicao).
+- `truncate_at`: par de valores/quantis correspondentes aos limites inferior e superior.
+"""
 function build_stage_ldruncertainty(
     stage_model::Distribution,
     stage_copula::Copula;
@@ -365,6 +560,12 @@ function build_stage_ldruncertainty(
     return stage_model
 end
 
+"""
+    build_stage_ldruncertainty(stage_models::Vector{<:Distribution}, stage_copula::IndependentCopula; kwargs...)
+
+Constroi a incerteza de um estagio quando as afluencias sao independentes: trunca cada marginal
+e as combina em uma `ProductDistribution`.
+"""
 function build_stage_ldruncertainty(
     stage_models::Vector{T} where T <: Distribution,
     stage_copula::IndependentCopula;
@@ -379,9 +580,16 @@ function build_stage_ldruncertainty(
         truncated_models = push!(truncated_models, truncated(sm, truncate_at...))
     end
 
-    return Distributions.product_distribution(truncated_models...)    
+    return Distributions.product_distribution(truncated_models...)
 end
 
+"""
+    build_stage_ldruncertainty(stage_models::Vector{<:Distribution}, stage_copula::Copula)
+
+Constroi a incerteza de um estagio com dependencia gaussiana: monta a matriz de covariancia a
+partir dos desvios marginais somados a `copula2Σ(stage_copula)` e retorna uma `MvNormal` (se as
+marginais forem `Normal`) ou `MvLogNormal` (se `LogNormal`).
+"""
 function build_stage_ldruncertainty(
     stage_models::Vector{T} where T <: Distribution,
     stage_copula::Copula
@@ -399,6 +607,13 @@ function build_stage_ldruncertainty(
     end
 end
 
+"""
+    stch2ldruncertainty(stch::Naive)::Vector{Distribution}
+
+Converte o processo estocastico `Naive` do lab no vetor de distribuicoes de incerteza (uma por
+estagio) esperado pelo LinearDecisionRules, validando-o e aplicando
+[`build_stage_ldruncertainty`](@ref) a cada par (marginais, copula).
+"""
 function stch2ldruncertainty(stch::Naive)::Vector{Distribution}
     models, copulas = validate_stch_for_ldr(stch)
 
@@ -410,10 +625,28 @@ function stch2ldruncertainty(stch::Naive)::Vector{Distribution}
     return mvdists
 end
 
+"""
+    determinisitic_stage1(dist::Distribution)::Vector{Float64}
+
+Retorna o valor deterministico do primeiro estagio como a media da distribuicao, sempre na
+forma de vetor (escalar embrulhado para distribuicoes univariadas). O primeiro estagio nao tem
+incerteza no LDR, por isso a afluencia e fixada nesse valor esperado.
+"""
 function determinisitic_stage1(dist::Distribution)::Vector{Float64}
     isa(dist, UnivariateDistribution) ? [mean(dist)] : mean(dist)
 end
 
+"""
+    add_inflow!(m::LDRModel, stch::Naive; n_breakpoints = 0)
+
+Declara as variaveis de afluencia do modelo. O primeiro estagio recebe uma afluencia
+deterministica, fixada na media (`determinisitic_stage1`); os demais recebem variaveis de
+incerteza via [`add_uncertain_inflow!`](@ref).
+
+Cada estagio possui sua propria variavel `INFLOW_s` (escalar quando ha uma unica usina, vetorial
+caso contrario), pois nao ha como declarar uma unica variavel matricial associando cada coluna a
+um conjunto de incerteza distinto.
+"""
 function add_inflow!(m::LDRModel, stch::Naive; n_breakpoints = 0)
     num_hydros, num_stages = size(stch)
 
@@ -438,6 +671,13 @@ function add_inflow!(m::LDRModel, stch::Naive; n_breakpoints = 0)
     end
 end
 
+"""
+    add_uncertain_inflow!(m::LDRModel, stage::Int, dist::UnivariateDistribution; n_breakpoints = 0)
+
+Declara a afluencia incerta escalar do estagio `stage` como variavel `INFLOW_stage` com o
+conjunto `Uncertainty(distribution = dist)`. Quando `n_breakpoints > 0`, atribui pontos de
+quebra (`BreakPoints`) para que a regra de decisao associada seja aproximada por partes.
+"""
 function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::UnivariateDistribution;
     n_breakpoints = 0)
 
@@ -455,6 +695,13 @@ function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::UnivariateDistribu
     return nothing
 end
 
+"""
+    add_uncertain_inflow!(m::LDRModel, stage::Int, dist::ProductDistribution; n_breakpoints = 0)
+
+Declara a afluencia incerta vetorial (afluencias independentes) do estagio `stage` como um vetor
+de variaveis `INFLOW_stage` sob o conjunto `Uncertainty`, opcionalmente com pontos de quebra por
+componente.
+"""
 function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::ProductDistribution;
     n_breakpoints = 0)
 
@@ -466,16 +713,24 @@ function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::ProductDistributio
         base_name = String(varname),
         set = Uncertainty(; distribution = dist)
     )
-    
+
     if n_breakpoints > 0
         for n in 1:size
             JuMP.set_attribute(m[varname][n], BreakPoints(), n_breakpoints)
         end
     end
-        
+
     return nothing
 end
 
+"""
+    add_uncertain_inflow!(m::LDRModel, stage::Int, dist::MultivariateNormal; n_breakpoints = 0, alpha = .95)
+
+Declara a afluencia incerta vetorial com dependencia gaussiana do estagio `stage`. A `MvNormal`
+e envolvida em uma `ConfidenceMvNormal` de nivel `alpha` — que a restringe ao elipsoide de
+confianca, garantindo suporte finito exigido pelo `Uncertainty` — antes de declarar o vetor de
+variaveis, opcionalmente com pontos de quebra por componente.
+"""
 function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::MultivariateNormal;
     n_breakpoints = 0, alpha = .95)
     size = length(dist)
@@ -487,7 +742,7 @@ function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::MultivariateNormal
         base_name = String(varname),
         set = Uncertainty(; distribution = dist)
     )
-    
+
     if n_breakpoints > 0
         for n in 1:size
             JuMP.set_attribute(m[varname][n], BreakPoints(), n_breakpoints)
@@ -499,6 +754,13 @@ end
 
 # OBJECTIVE FUNCTION -------------------------------------------------------------------------------
 
+"""
+    add_objective!(m::LDRModel, s::SystemData, stch::Naive)
+
+Define a funcao objetivo de minimizacao do custo total ao longo de todos os estagios, somando o
+custo de geracao termica, a penalidade de deficit, as penalidades de intercambio direto e
+reverso e a penalidade de vertimento.
+"""
 function add_objective!(m::LDRModel, s::SystemData, stch::Naive)
     hydros = get_hydros_entities(s)
     buses = get_buses_entities(s)
