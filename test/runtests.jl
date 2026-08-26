@@ -1,7 +1,9 @@
 using lab2ldr
 using Test
 
-using SDDPlab
+# On the abstract-engine branch these variable-name constants live in SDDPlab.Lab
+# and are no longer re-exported at the SDDPlab top level, so import them explicitly.
+import SDDPlab.Lab: STORED_VOLUME, TURBINED_FLOW, SPILLAGE, THERMAL_GENERATION, LOAD, DEFICIT
 using LinearDecisionRules
 using JuMP
 using HiGHS
@@ -78,12 +80,12 @@ const DATA_1DTOY = normpath(joinpath(@__DIR__, "..", "data", "1dtoy"))
             @test m isa LinearDecisionRules.LDRModel
 
             # dimensoes (entidade, estagio) das variaveis de sistema
-            @test size(m[SDDPlab.STORED_VOLUME]) == (1, 4)
-            @test size(m[SDDPlab.TURBINED_FLOW]) == (1, 4)
-            @test size(m[SDDPlab.SPILLAGE]) == (1, 4)
-            @test size(m[SDDPlab.THERMAL_GENERATION]) == (2, 4)
-            @test size(m[SDDPlab.LOAD]) == (1, 4)
-            @test size(m[SDDPlab.DEFICIT]) == (1, 4)
+            @test size(m[STORED_VOLUME]) == (1, 4)
+            @test size(m[TURBINED_FLOW]) == (1, 4)
+            @test size(m[SPILLAGE]) == (1, 4)
+            @test size(m[THERMAL_GENERATION]) == (2, 4)
+            @test size(m[LOAD]) == (1, 4)
+            @test size(m[DEFICIT]) == (1, 4)
 
             # afluencia do primeiro estagio e deterministica (fixa); as demais existem
             @test is_fixed(m[:INFLOW_1])
@@ -95,7 +97,7 @@ const DATA_1DTOY = normpath(joinpath(@__DIR__, "..", "data", "1dtoy"))
         @testset "atributo de estagio" begin
             for s in 1:4
                 @test get_attribute(
-                    m[SDDPlab.STORED_VOLUME][1, s], LinearDecisionRules.Stage()
+                    m[STORED_VOLUME][1, s], LinearDecisionRules.Stage()
                 ) == s
             end
         end
