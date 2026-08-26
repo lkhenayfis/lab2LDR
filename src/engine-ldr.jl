@@ -48,6 +48,7 @@ function build_model(path::String, optimizer; n_breakpoints = 0)::LDRModel
     add_inflow!(m, stochastic; n_breakpoints = n_breakpoints)
     add_hydro_balance!(m, get_hydros(system), stochastic)
     add_load_balance!(m, files, num_stages)
+    add_endcuts!(m, cuts)
     add_objective!(m, system, stochastic)
 
     return m
@@ -740,6 +741,20 @@ function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::MultivariateNormal
     return nothing
 end
 
+# END CUTS -----------------------------------------------------------------------------------------
+
+function add_endcuts!(m::LDRModel, cuts::EndCuts)
+    n_cuts = cuts.n_cuts
+
+    m[:theta] = JuMP.@variable(m, base_name = "theta")
+    JuMP.set_lower_bound(m[:theta], 0.0)
+
+    JuMP.@constraint(
+        m, [k in 1:n_cuts],
+        m[:theta] >= cuts.intercept[k] + cuts.coefficients[k,:]' * m[STORED_VOLUME][:,end]
+    )
+end
+
 # OBJECTIVE FUNCTION -------------------------------------------------------------------------------
 
 """
@@ -763,6 +778,7 @@ function add_objective!(m::LDRModel, s::SystemData, stch::Naive)
     @objective(
         m,
         Min,
+            m[:theta] +
             sum(thermals[n].cost * m[THERMAL_GENERATION][n,s] for n in 1:nt, s in 1:ns) +
             sum(buses[n].deficit_cost * m[DEFICIT][n,s] for n in 1:nb, s in 1:ns) +
             sum(lines[n].exchange_penalty * m[DIRECT_EXCHANGE][n,s] for n in 1:nl, s in 1:ns) +
