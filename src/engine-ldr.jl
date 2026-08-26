@@ -30,12 +30,12 @@ Atualmente apenas o caso com uma unica usina hidreletrica esta funcional; os dem
 (multiplas hidros, linhas de intercambio) ainda nao estao operacionais.
 """
 function build_model(path::String, optimizer; n_breakpoints = 0)::LDRModel
-    study = SDDPlab.read_study(path)
+    study = read_study(path)
     files = study.inputs.files
 
-    system = SDDPlab.get_system(files)
-    scenarios = SDDPlab.get_scenarios(files)
-    stochastic = SDDPlab.get_stochastic_process(scenarios.inflow)
+    system = get_system(files)
+    scenarios = get_scenarios(files)
+    stochastic = scenarios.inflow.stochastic_process
 
     num_stages = get_number_of_stages(get_graph(scenarios))
 
