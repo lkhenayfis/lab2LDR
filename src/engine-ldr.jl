@@ -309,19 +309,32 @@ end
 
 function build_stage_ldruncertainty_1d(
     stage_models::Vector{T} where T <: Distribution,
-    stage_copula::Copula
+    stage_copula::Copula;
+    truncate_mode = [:value, :quantile],
+    truncate_at = [0, .975]
     )::UnivariateDistribution
 
     mod = stage_models[1]
-    if isa(mod, Normal) mod = truncated(mod, 0.0) end
 
-    return stage_models[1]
+    truncate_at[1] = (truncate_mode[1] == :quantile) ? quantile(mod, truncate_at[1]) : truncate_at[1]
+    truncate_at[2] = (truncate_mode[2] == :quantile) ? quantile(mod, truncate_at[2]) : truncate_at[2]
+    mod = truncated(mod, truncate_at...)
+
+    return mod
+end
+
+function build_stage_ldruncertainty_Nd(
+    stage_models::Vector{T} where T <: Distribution,
+    stage_copula::IndependentCopula
+    )::MultivariateDistribution
+
+    return Distributions.product_distribution(stage_models...)    
 end
 
 function build_stage_ldruncertainty_Nd(
     stage_models::Vector{T} where T <: Distribution,
     stage_copula::Copula
-    )::UnivariateDistribution
+    )::MultivariateDistribution
 
     means = [m.μ for m in stage_models]
     stds = [m.σ for m in stage_models]
@@ -358,29 +371,57 @@ function stch2ldruncertainty(stch::Naive)::Vector{Distribution}
     return mvdists
 end
 
-function determinisitic_stage1(dists::Vector{Distribution})::Vector{Float64}
-    dist1 = dists[1]
-    isa(dist1, UnivariateDistribution) ? [mean(dist1)] : mean(dist1)
+function determinisitic_stage1(dist::Distribution)::Vector{Float64}
+    isa(dist, UnivariateDistribution) ? [mean(dist)] : mean(dist)
 end
 
 function add_inflow!(m::LDRModel, hydros::Hydros, stch::Naive)
     num_hydros, num_stages = size(stch)
 
     ldr_dists = stch2ldruncertainty(stch)
-    stage_1 = determinisitic_stage1(ldr_dists)
+    stage_1 = determinisitic_stage1(ldr_dists[1])
 
-    m[INFLOW_1] = JuMP.@variable(m, [1:num_hydros], base_name = String(INFLOW_1))
+    m[:INFLOW_1] = JuMP.@variable(m, [1:num_hydros], base_name = "INFLOW_1")
     for n in 1:num_hydros
-        JuMP.fix(m[INFLOW_1][n], stage_1[n])
+        JuMP.fix(m[:INFLOW_1][n], stage_1[n])
     end
 
     for s in 2:num_stages
-        var = Symbol("INFLOW_" * string(s))
-        m[var] = JuMP.@variable(
-            m,
-            [1:num_hydros],
-            base_name = String(var),
-            set = Uncertainty(; distribution = ldr_dists[s])
-        )
+        add_uncertain_inflow!(m, s, ldr_dists[s])
     end
+end
+
+function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::UnivariateDistribution)
+    varname = Symbol("INFLOW_" * string(stage))
+    JuMP.@variable(
+        m,
+        base_name = String(varname),
+        set = Uncertainty(; distribution = dist)
+    )
+    return nothing
+end
+
+function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::ProductDistribution)
+    size = length(dist)
+    varname = Symbol("INFLOW_" * string(stage))
+    JuMP.@variable(
+        m,
+        [1:size],
+        base_name = String(varname),
+        set = Uncertainty(; distribution = dist)
+    )
+    return nothing
+end
+
+function add_uncertain_inflow!(m::LDRModel, stage::Int, dist::MultivariateNormal; alpha = .95)
+    size = length(dist)
+    dist = LinearDecisionRules.ConfidenceMvNormal(dist.μ, dist.Σ, alpha)
+    varname = Symbol("INFLOW_" * string(stage))
+    JuMP.@variable(
+        m,
+        [1:size],
+        base_name = String(varname),
+        set = Uncertainty(; distribution = dist)
+    )
+    return nothing
 end
