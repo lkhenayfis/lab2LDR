@@ -311,7 +311,23 @@ function copula2Σ(c::GaussianCopula)
     return Σ
 end
 
-function build_stage_ldruncertainty(
+function build_stage_ldruncertainty_1d(
+    stage_models::Vector{T} where T <: Distribution,
+    stage_copula::Copula;
+    truncate_mode = [:value, :quantile],
+    truncate_at = [0, .975]
+    )::UnivariateDistribution
+
+    mod = stage_models[1]
+
+    truncate_at[1] = (truncate_mode[1] == :quantile) ? quantile(mod, truncate_at[1]) : truncate_at[1]
+    truncate_at[2] = (truncate_mode[2] == :quantile) ? quantile(mod, truncate_at[2]) : truncate_at[2]
+    mod = truncated(mod, truncate_at...)
+
+    return mod
+end
+
+function build_stage_ldruncertainty_Nd(
     stage_models::Vector{T} where T <: Distribution,
     stage_copula::IndependentCopula;
     truncate_mode = [:value, :quantile],
@@ -324,10 +340,11 @@ function build_stage_ldruncertainty(
         truncate_at[2] = (truncate_mode[2] == :quantile) ? quantile(sm, truncate_at[2]) : truncate_at[2]
         truncated_models = push!(truncated_models, truncated(sm, truncate_at...))
     end
+
     return Distributions.product_distribution(truncated_models...)    
 end
 
-function build_stage_ldruncertainty(
+function build_stage_ldruncertainty_Nd(
     stage_models::Vector{T} where T <: Distribution,
     stage_copula::Copula
     )::MultivariateDistribution
@@ -339,8 +356,20 @@ function build_stage_ldruncertainty(
 
     if isa(stage_models[1], Normal)
         return MvNormal(means, Σ)
+    elseif isa(stage_models[1], LogNormal)
+        return MvLogNormal(means, Σ)
+    end
+end
+
+function build_stage_ldruncertainty(
+    stage_models::Vector{T} where T <: Distribution,
+    stage_copula::Copula
+    )::UnivariateDistribution
+
+    if length(stage_models) == 1
+        build_stage_ldruncertainty_1d(stage_models, stage_copula)
     else
-        error("Apenas normais multivariadas sao suportadas para incerteza covariada")
+        build_stage_ldruncertainty_Nd(stage_models, stage_copula)
     end
 end
 
