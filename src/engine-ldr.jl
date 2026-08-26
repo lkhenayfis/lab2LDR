@@ -271,12 +271,33 @@ end
 
 # UNCERTAINTY --------------------------------------------------------------------------------------
 
-function get_models_per_stage(stch::Naive)::Vector{Vector{T} where T <: Distribution}
-    num_hydros, num_stages = size(stch)
-    models = []
+function get_models_per_stage_1d(stch::Naive)::Vector{<:Distribution}
+    num_stages = size(stch, 2)
+    models = Vector{Distribution}()
+    for i in 1:num_stages
+        stage_i = stch.models[1].distributions[i]
+        push!(models, stage_i)
+    end
+    return models
+end
+
+function get_models_per_stage_Nd(stch::Naive)::Vector{Vector{<:Distribution}}
+    num_stages = size(stch, 2)
+    models = Vector{Vector{Distribution}}()
     for i in 1:num_stages
         stage_i = [stch.models[j].distributions[i] for j in 1:num_hydros]
         push!(models, stage_i)
+    end
+    return models
+end
+
+function get_models_per_stage(stch::Naive)::Union{Vector{<:Distribution},Vector{Vector{<:Distribution}}}
+    num_hydros = size(stch, 1)
+
+    if num_hydros == 1
+        models = get_models_per_stage_1d(stch)
+    else
+        models = get_models_per_stage_Nd(stch)
     end
     
     return models
@@ -286,7 +307,20 @@ function get_copulas_per_stage(stch::Naive)::Vector{Copula}
     [stch.copulas[j] for j in range(1, size(stch, 2))]
 end
 
-function validate_univar_gaussian(models_per_stage)
+function validate_univar_gaussian(model_per_stage::Vector{<:Distribution})
+    valid = true
+    for dist in model_per_stage
+        valid = valid & (isa(dist, Normal) | isa(dist, LogNormal))
+    end
+    
+    if !valid
+        error("todas as distribuicoes univariadas devem ser Normais ou LogNormais")
+    else
+        return true
+    end
+end
+
+function validate_univar_gaussian(models_per_stage::Vector{Vector{<:Distribution}})
     valid = true
     for stage_i in models_per_stage
         for dist in stage_i
@@ -331,23 +365,21 @@ function copula2Σ(c::GaussianCopula)
     return Σ
 end
 
-function build_stage_ldruncertainty_1d(
-    stage_models::Vector{T} where T <: Distribution,
+function build_stage_ldruncertainty(
+    stage_model::Distribution,
     stage_copula::Copula;
     truncate_mode = [:value, :quantile],
     truncate_at = [0, .975]
     )::UnivariateDistribution
 
-    mod = stage_models[1]
+    truncate_at[1] = (truncate_mode[1] == :quantile) ? quantile(stage_model, truncate_at[1]) : truncate_at[1]
+    truncate_at[2] = (truncate_mode[2] == :quantile) ? quantile(stage_model, truncate_at[2]) : truncate_at[2]
+    stage_model = truncated(stage_model, truncate_at...)
 
-    truncate_at[1] = (truncate_mode[1] == :quantile) ? quantile(mod, truncate_at[1]) : truncate_at[1]
-    truncate_at[2] = (truncate_mode[2] == :quantile) ? quantile(mod, truncate_at[2]) : truncate_at[2]
-    mod = truncated(mod, truncate_at...)
-
-    return mod
+    return stage_model
 end
 
-function build_stage_ldruncertainty_Nd(
+function build_stage_ldruncertainty(
     stage_models::Vector{T} where T <: Distribution,
     stage_copula::IndependentCopula;
     truncate_mode = [:value, :quantile],
@@ -364,7 +396,7 @@ function build_stage_ldruncertainty_Nd(
     return Distributions.product_distribution(truncated_models...)    
 end
 
-function build_stage_ldruncertainty_Nd(
+function build_stage_ldruncertainty(
     stage_models::Vector{T} where T <: Distribution,
     stage_copula::Copula
     )::MultivariateDistribution
@@ -378,18 +410,6 @@ function build_stage_ldruncertainty_Nd(
         return MvNormal(means, Σ)
     elseif isa(stage_models[1], LogNormal)
         return MvLogNormal(means, Σ)
-    end
-end
-
-function build_stage_ldruncertainty(
-    stage_models::Vector{T} where T <: Distribution,
-    stage_copula::Copula
-    )::UnivariateDistribution
-
-    if length(stage_models) == 1
-        build_stage_ldruncertainty_1d(stage_models, stage_copula)
-    else
-        build_stage_ldruncertainty_Nd(stage_models, stage_copula)
     end
 end
 
