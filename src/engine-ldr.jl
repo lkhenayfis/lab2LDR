@@ -743,6 +743,17 @@ end
 
 # END CUTS -----------------------------------------------------------------------------------------
 
+"""
+    add_endcuts!(m::LDRModel, cuts::EndCuts)
+
+Adiciona a variavel de custo futuro `theta` (nao-negativa) e as restricoes de corte que a
+minoram em funcao do volume armazenado no ultimo estagio:
+
+    theta >= intercept[k] + coefficients[k, :] ⋅ STORED_VOLUME[:, fim],  para cada corte k.
+
+Representa a funcao de custo futuro (condicao de contorno terminal) descrita por `cuts`. A
+variavel `theta` e depois somada a funcao objetivo por [`add_objective!`](@ref).
+"""
 function add_endcuts!(m::LDRModel, cuts::EndCuts)
     n_cuts = cuts.n_cuts
 
