@@ -38,6 +38,51 @@ ambiente antes da resolucao do `lab2ldr` — do contrario a resolucao tentaria b
 registradas incompativeis (`SDDPlab` 2.0.0 e a `LinearDecisionRules` do branch `Multistage`). Para
 desenvolvimento local, use `Pkg.develop(path = "...")` no lugar de `Pkg.add`.
 
+## Preparando o estudo: chaves `cuts` e `truncation`
+
+O formato de estudo do SDDPlab ainda nao modela nativamente a funcao de custo futuro (condicao de
+contorno terminal) nem os limites de truncamento das afluencias. Como o motor LDR precisa dos
+dois, o `lab2ldr` os le de duas chaves adicionais no `main.jsonc`, no mesmo nivel de `inputs` e
+`engine`:
+
+- **`cuts`** — os cortes lineares que descrevem o custo futuro sobre o volume armazenado no ultimo
+  estagio. Sao um `intercept` (vetor, um valor por corte) e `coefficients` (uma linha por corte,
+  uma coluna por usina); cada corte `k` impoe `theta >= intercept[k] + coefficients[k, :] .
+volume_final`. Sem esse termo terminal o problema fica sem valor da agua e a solucao e
+  degenerada (esvaziar o reservatorio nao tem custo).
+
+- **`truncation`** — os limites `[inferior, superior]` de cada afluencia incerta, por usina (`id`)
+  e por estagio (`stage`). O conjunto `Uncertainty` do LinearDecisionRules exige suporte finito,
+  entao as marginais dos estagios estocasticos (do 2o em diante) sao truncadas nesses limites
+  antes de entrarem no modelo. E preciso uma entrada de `bounds` para cada estagio estocastico.
+
+```jsonc
+"cuts": {
+    "coefficients": [
+        [-300.0, -600.0, -1200.0, -2500.0, -7800.0]
+    ],
+    "intercept": [75000.0, 135000.0, 210000.0, 310000.0, 390000.0]
+},
+"truncation": [
+    {
+        "id": 1,
+        "bounds": [
+            { "stage": 2, "value": [0.0, 120.0] },
+            { "stage": 3, "value": [0.0, 120.0] }
+        ]
+    }
+]
+```
+
+> **Importante — afluencia do 1o estagio.** O primeiro estagio e deterministico. O `lab2ldr` fixa
+> a afluencia do estagio 1 na **media** da marginal daquele estagio (que **nao** e truncada). Para
+> garantir que os dois motores resolvam exatamente o mesmo problema, defina a marginal do estagio
+> 1 (`season` 1), para toda usina, como uma `Normal` com **media igual ao valor desejado e
+> variancia zero** — no arquivo de cenarios de afluencia, `"kind": "Normal", "parameters": [valor,
+0]`. Assim o LDR usa a media (o proprio valor) e o SDDP, ao amostrar, so pode obter esse mesmo
+> valor: os dois enxergam a mesma condicao inicial deterministica. Uma variancia positiva no
+> estagio 1 tornaria o primeiro estagio estocastico apenas para o SDDP, divergindo do LDR.
+
 ## Motor LDR (lab2ldr)
 
 `build_model` le o estudo e devolve um `LDRModel` pronto para otimizar. `pkgdir` e usado apenas
