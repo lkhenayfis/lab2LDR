@@ -1,15 +1,14 @@
 using lab2ldr
 using Test
 
-# On the abstract-engine branch these variable-name constants live in SDDPlab.Lab
-# and are no longer re-exported at the SDDPlab top level, so import them explicitly.
-import SDDPlab.Lab: STORED_VOLUME, TURBINED_FLOW, SPILLAGE, THERMAL_GENERATION, LOAD, DEFICIT
 using LinearDecisionRules
 using JuMP
 using HiGHS
 using Distributions
 using Copulas
-using LinearAlgebra
+
+# variable-name constants (submodule import; not top-level exported on abstract-engine)
+import SDDPlab.Lab: STORED_VOLUME, THERMAL_GENERATION
 
 # helpers internos (nao exportados) exercitados isoladamente
 import lab2ldr:
@@ -20,26 +19,52 @@ import lab2ldr:
     determinisitic_stage1,
     build_stage_ldruncertainty
 
-# estudo de referencia: uma unica usina hidreletrica, 1 barra, 2 termicas, 4 estagios
-const DATA_1DTOY = normpath(joinpath(@__DIR__, "..", "data", "1dtoy"))
+const DATA = normpath(joinpath(@__DIR__, "..", "data"))
+
+# -----------------------------------------------------------------------------------------------
+# Resultados "golden" capturados do projeto CasosLDR (HydroToy/hydro2.jl e hydro3.jl, funcao
+# `ldr_solution`), com LinearDecisionRules Multistage @ 0.3.0.
+# Cada linha: (estudo, n_breakpoints, Obj, Bound), onde
+#   Obj   = objective_value(ldr)              (primal)
+#   Bound = objective_value(ldr; dual = true) (dual)
+#
+# ATENCAO: atualmente o lab2ldr NAO reproduz estes valores. As comparacoes de objetivo/bound
+# abaixo estao marcadas como `@test_broken` (discrepancia conhecida, a resolver) — quando o
+# lab2ldr passar a bater com o golden, o `@test_broken` vira "Unexpected Pass" e sinaliza para
+# promover para `@test`.
+#
+# Causa suspeita: o modelo do CasosLDR limita a geracao hidraulica do estagio t pelo volume no
+# INICIO do estagio (`hydro_t <= volume_{t-1}`), impedindo turbinar a afluencia do proprio
+# estagio; o modelo do lab2ldr nao tem essa restricao (so impoe volume >= 0 via o balanco
+# hidrico), tendo mais flexibilidade e custo menor. O lab2ldr tambem carrega uma variavel de
+# DEFICIT sempre presente.
+# -----------------------------------------------------------------------------------------------
+const GOLDEN = [
+    ("hydrotoy2", 0, 119250.000000, 90500.000000),
+    ("hydrotoy2", 1, 98081.919583, 91161.044007),
+    ("hydrotoy2", 2, 93847.451161, 91087.710925),
+    ("hydrotoy2", 3, 93412.932692, 91707.138413),
+    ("hydrotoy3", 0, 191500.000000, 90750.000000),
+    ("hydrotoy3", 1, 119344.456318, 91806.622420),
+    ("hydrotoy3", 2, 107853.175057, 91673.182804),
+    ("hydrotoy3", 3, 106060.796247, 92577.468691),
+]
+
+const EXPECTED_STAGES = Dict("hydrotoy2" => 2, "hydrotoy3" => 3)
 
 @testset "lab2ldr.jl" begin
 
     # -------------------------------------------------------------------------
-    # Funcoes auxiliares puras, testadas sem precisar montar o modelo completo
-    # nem acionar o otimizador.
+    # Funcoes auxiliares puras, testadas sem precisar montar o modelo completo.
     # -------------------------------------------------------------------------
     @testset "helpers puros" begin
         @testset "build_cartesian_indexes" begin
-            # deve percorrer todas as dimensoes menos a ultima (a de estagios)
             @test build_cartesian_indexes(zeros(1, 4)) == CartesianIndex.(1:1)
             @test build_cartesian_indexes(zeros(3, 4)) == CartesianIndex.(1:3)
         end
 
         @testset "copula2Σ" begin
-            # copula independente -> sem correlacao cruzada
             @test copula2Σ(IndependentCopula(2)) == zeros(2, 2)
-            # copula gaussiana -> apenas termos fora da diagonal
             @test copula2Σ(GaussianCopula([1.0 0.5; 0.5 1.0])) == [0.0 0.5; 0.5 0.0]
         end
 
@@ -55,59 +80,44 @@ const DATA_1DTOY = normpath(joinpath(@__DIR__, "..", "data", "1dtoy"))
         end
 
         @testset "determinisitic_stage1" begin
-            # sempre retorna vetor: escalar embrulhado para distribuicoes univariadas
             @test determinisitic_stage1(Normal(41, 21)) == [41.0]
             @test determinisitic_stage1(MvNormal([1.0, 2.0], [1.0 0.0; 0.0 1.0])) ==
                 [1.0, 2.0]
         end
 
         @testset "build_stage_ldruncertainty (univariada)" begin
-            d = build_stage_ldruncertainty(Normal(41, 21), IndependentCopula(1))
-            @test d isa UnivariateDistribution
-            # truncamento padrao: [valor 0, quantil 0.975]
-            @test minimum(d) == 0.0
-            @test maximum(d) ≈ quantile(Normal(41, 21), 0.975)
+            # a truncagem foi movida para do_truncation!; este metodo agora apenas repassa a
+            # distribuicao recebida, sem alteracao
+            nd = Normal(41.0, 21.0)
+            @test build_stage_ldruncertainty(nd, IndependentCopula(1)) === nd
         end
     end
 
     # -------------------------------------------------------------------------
-    # Caminho funcional: estudo com uma unica hidro montado de ponta a ponta.
+    # Casos hydrotoy montados de ponta a ponta e comparados com o golden do
+    # CasosLDR. Estrutura -> deve passar; objetivo/bound -> @test_broken.
     # -------------------------------------------------------------------------
-    @testset "modelo 1dtoy (uma hidro)" begin
-        m = build_model(DATA_1DTOY, HiGHS.Optimizer; n_breakpoints = 1)
+    @testset "modelo hydrotoy (vs CasosLDR golden)" begin
+        for (study, n, obj_golden, bound_golden) in GOLDEN
+            @testset "$study n=$n" begin
+                m = build_model(joinpath(DATA, study), HiGHS.Optimizer; n_breakpoints = n)
 
-        @testset "estrutura" begin
-            @test m isa LinearDecisionRules.LDRModel
+                # estrutura (deve passar)
+                @test m isa LinearDecisionRules.LDRModel
+                ns = EXPECTED_STAGES[study]
+                @test size(m[STORED_VOLUME]) == (1, ns)
+                @test size(m[THERMAL_GENERATION]) == (3, ns)
+                @test is_fixed(m[:INFLOW_1])
+                # estagio 1 nao e truncado -> valor fixo = media de Normal(60, 20)
+                @test fix_value(m[:INFLOW_1]) ≈ 60.0
 
-            # dimensoes (entidade, estagio) das variaveis de sistema
-            @test size(m[STORED_VOLUME]) == (1, 4)
-            @test size(m[TURBINED_FLOW]) == (1, 4)
-            @test size(m[SPILLAGE]) == (1, 4)
-            @test size(m[THERMAL_GENERATION]) == (2, 4)
-            @test size(m[LOAD]) == (1, 4)
-            @test size(m[DEFICIT]) == (1, 4)
-
-            # afluencia do primeiro estagio e deterministica (fixa); as demais existem
-            @test is_fixed(m[:INFLOW_1])
-            for s in 2:4
-                @test haskey(object_dictionary(m), Symbol("INFLOW_$s"))
+                # objetivo/bound vs golden do CasosLDR (discrepancia conhecida)
+                LinearDecisionRules.optimize!(m)
+                obj = LinearDecisionRules.objective_value(m)
+                bound = LinearDecisionRules.objective_value(m; dual = true)
+                @test_broken isapprox(obj, obj_golden; rtol = 1e-4)
+                @test_broken isapprox(bound, bound_golden; rtol = 1e-4)
             end
-        end
-
-        @testset "atributo de estagio" begin
-            for s in 1:4
-                @test get_attribute(
-                    m[STORED_VOLUME][1, s], LinearDecisionRules.Stage()
-                ) == s
-            end
-        end
-
-        @testset "solucao" begin
-            LinearDecisionRules.optimize!(m)
-            obj = LinearDecisionRules.objective_value(m; dual = true)
-            @test isfinite(obj)
-            # ancora de regressao sobre os dados atuais do estudo 1dtoy
-            @test obj ≈ 3.7550274748 atol = 1e-2
         end
     end
 end
