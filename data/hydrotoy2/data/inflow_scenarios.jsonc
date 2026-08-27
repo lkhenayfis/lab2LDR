@@ -2,8 +2,9 @@
     // Ported from CasosLDR HydroToy: inflow_distr = Normal(60, 20).
     // The source truncates it to [0, 120]; truncation is applied downstream by
     // the lab2ldr pipeline (default settings) and is NOT declared here.
-    // Stage 1 is deterministic in the source (initial_inflow = 60); the lab2ldr
-    // engine fixes stage 1 to the mean of its marginal, which equals 60 here.
+    // Stage 1 is deterministic (initial_inflow = 60): its marginal is Normal(60, 0),
+    // i.e. zero variance, so both the LDR engine (which uses the mean) and the SDDP
+    // engine (which samples) see exactly 60 at stage 1 -- same problem for both.
     "marginal_models": [
         {
             "id": 1,
@@ -13,7 +14,7 @@
                     "kind": "Normal",
                     "parameters": [
                         60,
-                        20
+                        0
                     ]
                 },
                 {

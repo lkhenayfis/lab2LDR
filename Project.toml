@@ -1,6 +1,6 @@
 name = "lab2ldr"
 uuid = "deb9f8dc-a5eb-438d-8740-b8a41072836e"
-version = "1.0.0"
+version = "1.0.0-DEV"
 authors = ["lucas-khenayfis"]
 
 [deps]
