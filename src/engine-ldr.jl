@@ -306,7 +306,7 @@ function add_hydro_balance!(m::LDRModel, hydros::Hydros, stch::Naive)
             m,
             [s = 1:num_stages],
             m[STORED_VOLUME][1, s] ==
-                (s > 1 ? m[STORED_VOLUME][1, s-1] : hydros.entities[1].initial_storage) - m[OUTFLOW][1] +
+                (s > 1 ? m[STORED_VOLUME][1, s-1] : hydros.entities[1].initial_storage) - m[OUTFLOW][1, s] +
             m[inflow_vars[s]] +
             sum(
                 m[OUTFLOW][j, s] for j in 1:num_hydros if

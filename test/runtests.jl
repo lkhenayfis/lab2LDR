@@ -28,16 +28,10 @@ const DATA = normpath(joinpath(@__DIR__, "..", "data"))
 #   Obj   = objective_value(ldr)              (primal)
 #   Bound = objective_value(ldr; dual = true) (dual)
 #
-# ATENCAO: atualmente o lab2ldr NAO reproduz estes valores. As comparacoes de objetivo/bound
-# abaixo estao marcadas como `@test_broken` (discrepancia conhecida, a resolver) — quando o
-# lab2ldr passar a bater com o golden, o `@test_broken` vira "Unexpected Pass" e sinaliza para
-# promover para `@test`.
-#
-# Causa suspeita: o modelo do CasosLDR limita a geracao hidraulica do estagio t pelo volume no
-# INICIO do estagio (`hydro_t <= volume_{t-1}`), impedindo turbinar a afluencia do proprio
-# estagio; o modelo do lab2ldr nao tem essa restricao (so impoe volume >= 0 via o balanco
-# hidrico), tendo mais flexibilidade e custo menor. O lab2ldr tambem carrega uma variavel de
-# DEFICIT sempre presente.
+# Os DUAIS do hydrotoy3 batem exato em n=0, mas divergem ~0.2% para n>=1 (efeito residual do LDR
+# dual com dois estagios estocasticos); por isso apenas hydrotoy3 com n>=1 segue marcado
+# `@test_broken` — a investigar; quando baterem, o `@test_broken` vira "Unexpected Pass" e
+# sinaliza para promover a `@test`.
 # -----------------------------------------------------------------------------------------------
 const GOLDEN = [
     ("hydrotoy2", 0, 119250.000000, 90500.000000),
@@ -111,12 +105,18 @@ const EXPECTED_STAGES = Dict("hydrotoy2" => 2, "hydrotoy3" => 3)
                 # estagio 1 nao e truncado -> valor fixo = media de Normal(60, 20)
                 @test fix_value(m[:INFLOW_1]) ≈ 60.0
 
-                # objetivo/bound vs golden do CasosLDR (discrepancia conhecida)
+                # objetivo/bound vs golden do CasosLDR
                 LinearDecisionRules.optimize!(m)
                 obj = LinearDecisionRules.objective_value(m)
                 bound = LinearDecisionRules.objective_value(m; dual = true)
-                @test_broken isapprox(obj, obj_golden; rtol = 1e-4)
-                @test_broken isapprox(bound, bound_golden; rtol = 1e-4)
+                @test isapprox(obj, obj_golden; rtol = 1e-4)
+                # o dual do hydrotoy3 bate exato em n=0 mas diverge ~0.2% para n>=1 (residual do
+                # LDR dual com dois estagios estocasticos, a investigar) -> so esses ficam broken
+                if study == "hydrotoy3" && n >= 1
+                    @test_broken isapprox(bound, bound_golden; rtol = 1e-4)
+                else
+                    @test isapprox(bound, bound_golden; rtol = 1e-4)
+                end
             end
         end
     end
