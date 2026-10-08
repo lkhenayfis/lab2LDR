@@ -14,7 +14,7 @@ LinearDecisionRules = "ee4db4e3-7eec-47e5-9935-9699b02754f6"
 SDDPlab = "5c1c4b2a-157d-4661-af07-65cbafd6173d"
 
 [compat]
-Copulas = "0.1.41"
+Copulas = "0.1.41, 1.0"
 Distributions = "0.25.130"
 GLPK = "1.2.1"
 HiGHS = "1.24.1"
